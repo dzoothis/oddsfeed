@@ -139,11 +139,24 @@ class BetTypesController extends Controller
     private function getMatchesFromDatabase($sportId, $leagueId, $isLive)
     {
         try {
+            \Log::info('getMatchesFromDatabase called', [
+                'sportId' => $sportId,
+                'leagueId' => $leagueId,
+                'isLive' => $isLive
+            ]);
+
             // Convert Pinnacle league ID to database ID
             $league = \DB::table('leagues')->where('pinnacleId', $leagueId)->first();
             if (!$league) {
+                \Log::info('League not found', ['pinnacleId' => $leagueId]);
                 return [];
             }
+
+            \Log::info('League found', [
+                'league_name' => $league->name,
+                'league_sport_id' => $league->sportId,
+                'requested_sport_id' => $sportId
+            ]);
 
             $query = \DB::table('matches')
                 ->where('sportId', $sportId)
@@ -157,6 +170,11 @@ class BetTypesController extends Controller
             }
 
             $matches = $query->orderBy('startTime', 'asc')->get();
+
+            \Log::info('Database query result', [
+                'matches_found' => $matches->count(),
+                'query_sql' => $query->toSql()
+            ]);
 
             // Convert to Pinnacle API format expected by processMatchesWithBetTypes
             $formattedMatches = [];
