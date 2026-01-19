@@ -99,8 +99,22 @@ class BetTypesController extends Controller
                     $matches = $this->apiFootball->getFixtures($leagueId, null, $isLive);
                 }
 
-                // If still no data, return mock data for testing
+                // If still no data from APIs, try database as fallback
                 if (empty($matches['fixtures'] ?? []) && empty($matches['response'] ?? [])) {
+                    \Log::info('API fallback: Using database for matches', [
+                        'sportId' => $sportId,
+                        'leagueId' => $leagueId,
+                        'isLive' => $isLive
+                    ]);
+                    $matches = $this->getMatchesFromDatabase($sportId, $leagueId, $isLive);
+                    \Log::info('Database fallback result', [
+                        'fixtures_count' => count($matches['fixtures'] ?? []),
+                        'has_fixtures' => !empty($matches['fixtures'] ?? [])
+                    ]);
+                }
+
+                // If still no data, return mock data for testing
+                if (empty($matches['fixtures'] ?? []) && empty($matches['response'] ?? []) && empty($matches ?? [])) {
                     $matches = $this->getMockMatches($sportId, $leagueId, $isLive);
                 }
 
@@ -116,6 +130,60 @@ class BetTypesController extends Controller
                 'error' => $e->getMessage()
             ]);
             return response()->json(['error' => 'Failed to load matches data'], 500);
+        }
+    }
+
+    /**
+     * Get matches from database as fallback when APIs fail
+     */
+    private function getMatchesFromDatabase($sportId, $leagueId, $isLive)
+    {
+        try {
+            // Convert Pinnacle league ID to database ID
+            $league = \DB::table('leagues')->where('pinnacleId', $leagueId)->first();
+            if (!$league) {
+                return [];
+            }
+
+            $query = \DB::table('matches')
+                ->where('sportId', $sportId)
+                ->where('leagueId', $league->id)
+                ->where('lastUpdated', '>', now()->subHours(24));
+
+            if ($isLive) {
+                $query->where('eventType', 'live')->where('live_status_id', '>', 0);
+            } else {
+                $query->where('eventType', 'prematch');
+            }
+
+            $matches = $query->orderBy('startTime', 'asc')->get();
+
+            // Convert to Pinnacle API format expected by processMatchesWithBetTypes
+            $formattedMatches = [];
+            foreach ($matches as $match) {
+                $formattedMatches[] = [
+                    'id' => $match->eventId,
+                    'sport_name' => $sportId == 1 ? 'Soccer' : ($sportId == 2 ? 'Tennis' : 'Unknown'),
+                    'league_name' => $match->leagueName,
+                    'home_team' => $match->homeTeam,
+                    'away_team' => $match->awayTeam,
+                    'event_date' => $match->startTime,
+                    'status' => $isLive ? ($match->live_status_id > 0 ? 1 : 0) : 0,
+                    'scores' => $isLive ? ['home' => 0, 'away' => 0] : null,
+                    'has_open_markets' => $match->hasOpenMarkets ?? false,
+                    'markets' => []
+                ];
+            }
+
+            return ['fixtures' => $formattedMatches];
+        } catch (\Exception $e) {
+            \Log::error('Database fallback failed', [
+                'sportId' => $sportId,
+                'leagueId' => $leagueId,
+                'isLive' => $isLive,
+                'error' => $e->getMessage()
+            ]);
+            return [];
         }
     }
 
