@@ -1,0 +1,341 @@
+# =============================================================================
+# Laravel + Vue.js Project .gitignore
+# =============================================================================
+
+# =============================================================================
+# Laravel Backend
+# =============================================================================
+
+# Laravel specific
+/vendor/
+/node_modules/
+/npm-debug.log*
+/yarn-debug.log*
+/yarn-error.log*
+
+# Laravel storage and logs
+/storage/app/*
+/storage/framework/cache/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/logs/*
+!/storage/app/.gitkeep
+!/storage/framework/.gitkeep
+!/storage/framework/cache/.gitkeep
+!/storage/framework/sessions/.gitkeep
+!/storage/framework/views/.gitkeep
+!/storage/logs/.gitkeep
+
+# Laravel public files
+/public/build
+/public/hot
+/public/storage
+/public/uploads
+
+# Laravel environment files
+.env
+.env.backup
+.env.local
+.env.production
+.env.staging
+.env.testing
+.env.example
+
+# Laravel specific cache and temp files
+/bootstrap/cache/*
+!/bootstrap/cache/.gitkeep
+.phpunit.result.cache
+.phpunit.cache/
+
+# Laravel Sail
+/sail
+/docker-compose.override.yml
+
+# Laravel Homestead
+Homestead.json
+Homestead.yaml
+
+# Laravel Vapor
+/vapor
+
+# Laravel Jetstream
+/artisan
+
+# Laravel authentication
+/auth.json
+
+# =============================================================================
+# Vue.js Frontend (in /frontend directory)
+# =============================================================================
+
+# Dependencies
+frontend/node_modules/
+/frontend/npm-debug.log*
+/frontend/yarn-debug.log*
+/frontend/yarn-error.log*
+
+# Production builds
+frontend/dist/
+/frontend/build/
+/frontend/.nuxt/
+/frontend/out/
+
+# Environment variables
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/.env.staging.local
+
+# Logs
+frontend/logs
+frontend/*.log
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Runtime data
+frontend/pids
+frontend/*.pid
+frontend/*.seed
+frontend/*.pid.lock
+
+# Coverage directory used by tools like istanbul
+frontend/coverage/
+frontend/*.lcov
+
+# nyc test coverage
+frontend/.nyc_output
+
+# Dependency directories
+frontend/jspm_packages/
+
+# Optional npm cache directory
+frontend/.npm
+
+# Optional eslint cache
+frontend/.eslintcache
+
+# Microbundle cache
+frontend/.rpt2_cache/
+frontend/.rts2_cache_cjs/
+frontend/.rts2_cache_es/
+frontend/.rts2_cache_umd/
+
+# Optional REPL history
+frontend/.node_repl_history
+
+# Output of 'npm pack'
+frontend/*.tgz
+
+# Yarn Integrity file
+frontend/.yarn-integrity
+
+# dotenv environment variables file
+frontend/.env.test
+
+# parcel-bundler cache (https://parceljs.org/)
+frontend/.cache
+frontend/.parcel-cache
+
+# Next.js build output
+frontend/.next
+
+# Nuxt.js build / generate output
+frontend/.nuxt
+
+# Gatsby files
+frontend/.cache/
+frontend/public
+
+# Storybook build outputs
+frontend/out
+frontend/storybook-out
+
+# Temporary folders
+frontend/tmp/
+frontend/temp/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =============================================================================
+# Development Tools & IDEs
+# =============================================================================
+
+# Fleet
+.fleet/
+
+# Nova
+.nova/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# PhpStorm / IntelliJ
+.idea/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# OS X
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# =============================================================================
+# Testing & CI/CD
+# =============================================================================
+
+# PHPUnit
+.phpunit.result.cache
+phpunit.xml
+
+# Testing
+/tests/coverage
+/tests/.coverage
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
+# =============================================================================
+# Database & Cache
+# =============================================================================
+
+# SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Redis dumps
+dump.rdb
+
+# Cache files
+.cache/
+*.cache
+
+# =============================================================================
+# Security & Keys
+# =============================================================================
+
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+
+# SSH keys
+id_rsa
+id_rsa.pub
+known_hosts
+
+# AWS credentials
+.aws/
+
+# Google Service Account keys
+*.json
+
+# =============================================================================
+# Documentation & Assets
+# =============================================================================
+
+# Generated documentation
+/docs/api/
+/docs/build/
+
+# Local development assets
+/resources/assets/
+/resources/views/
+
+# =============================================================================
+# Backup & Archive Files
+# =============================================================================
+
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+
+# Queue worker PIDs
+*.pid
+
+# Laravel specific
+.phpactor.json
+.phpunit.result.cache
+
+# Custom project files
+QUEUE_SETUP_README.md
