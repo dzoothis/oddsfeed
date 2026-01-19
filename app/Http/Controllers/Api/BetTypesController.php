@@ -176,6 +176,11 @@ class BetTypesController extends Controller
                 'query_sql' => $query->toSql()
             ]);
 
+            if ($matches->count() == 0) {
+                \Log::info('No matches found, returning empty array');
+                return [];
+            }
+
             // Convert to Pinnacle API format expected by processMatchesWithBetTypes
             $formattedMatches = [];
             foreach ($matches as $match) {
@@ -193,7 +198,13 @@ class BetTypesController extends Controller
                 ];
             }
 
-            return ['fixtures' => $formattedMatches];
+            $result = ['fixtures' => $formattedMatches];
+            \Log::info('getMatchesFromDatabase returning', [
+                'fixtures_count' => count($formattedMatches),
+                'result_structure' => array_keys($result)
+            ]);
+
+            return $result;
         } catch (\Exception $e) {
             \Log::error('Database fallback failed', [
                 'sportId' => $sportId,
