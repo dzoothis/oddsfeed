@@ -24,6 +24,8 @@ class LiveMatchSyncJob implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @return void
      */
     public function __construct($sportId = null, $leagueIds = [])
     {

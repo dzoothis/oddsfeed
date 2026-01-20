@@ -19,6 +19,7 @@ export const API_ENDPOINTS = {
 
   // Matches
   MATCHES: '/matches',
+  MATCHES_REFRESH: '/matches/refresh',
   MATCH_ODDS: (matchId) => `/matches/${matchId}/odds`
 };
 

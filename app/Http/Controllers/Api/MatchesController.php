@@ -1261,4 +1261,81 @@ class MatchesController extends Controller
 
         return $leagues;
     }
+
+    /**
+     * Manually trigger refresh of match and odds data
+     */
+    public function manualRefresh(Request $request)
+    {
+        try {
+            $sportId = $request->input('sport_id');
+            $leagueIds = $request->input('league_ids', []);
+            $matchType = $request->input('match_type', 'all'); // 'live', 'prematch', or 'all'
+            $forceRefresh = $request->input('force_refresh', true); // Force refresh regardless of cache
+
+            // Validate parameters
+            if (!$sportId) {
+                return response()->json(['error' => 'sport_id is required'], 400);
+            }
+
+            if (!in_array($matchType, ['live', 'prematch', 'all'])) {
+                return response()->json(['error' => 'match_type must be one of: live, prematch, all'], 400);
+            }
+
+            Log::info('Manual refresh triggered', [
+                'sportId' => $sportId,
+                'leagueIds' => $leagueIds,
+                'matchType' => $matchType,
+                'forceRefresh' => $forceRefresh
+            ]);
+
+            // Convert Pinnacle IDs to database IDs for the jobs
+            $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
+
+            // Dispatch jobs immediately with force refresh
+            $jobsDispatched = [];
+
+            if ($matchType === 'all' || $matchType === 'live') {
+                \App\Jobs\LiveMatchSyncJob::dispatch($sportId, $databaseLeagueIds)
+                    ->onQueue('live-sync');
+                $jobsDispatched[] = 'LiveMatchSyncJob';
+            }
+
+            if ($matchType === 'all' || $matchType === 'prematch') {
+                \App\Jobs\PrematchSyncJob::dispatch($sportId, $databaseLeagueIds)
+                    ->onQueue('prematch-sync');
+                $jobsDispatched[] = 'PrematchSyncJob';
+            }
+
+            // Always trigger odds sync
+            \App\Jobs\OddsSyncJob::dispatch([], $forceRefresh)
+                ->onQueue('odds-sync');
+            $jobsDispatched[] = 'OddsSyncJob';
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Manual refresh initiated successfully',
+                'jobs_dispatched' => $jobsDispatched,
+                'sport_id' => $sportId,
+                'league_ids' => $leagueIds,
+                'match_type' => $matchType,
+                'force_refresh' => $forceRefresh,
+                'timestamp' => now()->toISOString()
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Manual refresh failed', [
+                'error' => $e->getMessage(),
+                'sportId' => $sportId ?? null,
+                'leagueIds' => $leagueIds ?? [],
+                'matchType' => $matchType ?? 'all',
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'error' => 'Manual refresh failed',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

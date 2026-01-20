@@ -19,7 +19,7 @@ class Kernel extends ConsoleKernel
 
         // Live matches - high priority, frequent updates
         $schedule->job(new LiveMatchSyncJob())
-            ->everyThirtySeconds()
+            ->everyMinute()
             ->withoutOverlapping()
             ->runInBackground()
             ->onQueue('live-sync')
@@ -27,7 +27,7 @@ class Kernel extends ConsoleKernel
 
         // Odds sync - medium priority, regular updates for active matches
         $schedule->job(new OddsSyncJob())
-            ->everyTwoMinutes()
+            ->everyMinute()
             ->withoutOverlapping()
             ->runInBackground()
             ->onQueue('odds-sync')

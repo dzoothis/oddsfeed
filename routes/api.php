@@ -28,6 +28,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/reference/leagues/search', [ReferenceController::class, 'searchLeagues']);
 
     Route::post('/matches', [MatchesController::class, 'getMatches']);
+    Route::post('/matches/refresh', [MatchesController::class, 'manualRefresh']);
     Route::get('/matches/{matchId}/details', [MatchesController::class, 'getMatchDetails']);
     Route::get('/matches/{matchId}/odds', [MatchesController::class, 'getMatchOdds']);
 });

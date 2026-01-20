@@ -25,6 +25,8 @@ class OddsSyncJob implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @return void
      */
     public function __construct($matchIds = [], $forceRefresh = false)
     {
@@ -334,9 +336,9 @@ class OddsSyncJob implements ShouldQueue
             return false; // Never synced
         }
 
-        // Consider fresh if synced within last 4 minutes (buffer before 5-min schedule)
-        $minutesSinceLastSync = now()->diffInMinutes($lastSync);
-        return $minutesSinceLastSync < 4;
+        // Consider fresh if synced within last 50 seconds (buffer before 1-min schedule)
+        $secondsSinceLastSync = now()->diffInSeconds($lastSync);
+        return $secondsSinceLastSync < 50;
     }
 
     /**
