@@ -173,21 +173,6 @@
                   <div class="market-filters mb-4 border-b border-gray-200 pb-4">
                     <div class="flex items-center justify-between mb-3">
                       <div class="flex items-center gap-3 flex-1">
-                        <div class="flex-1 max-w-md">
-                          <div class="relative">
-                            <input
-                              type="text"
-                              :value="getFilterValue(match.id, 'search')"
-                              @input="setFilterValue(match.id, 'search', $event.target.value)"
-                              placeholder="Search by team name or line..."
-                              class="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                            >
-                            <svg class="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                            </svg>
-                          </div>
-                        </div>
-  
                         <div class="flex items-center gap-2 flex-wrap">
                           <!-- Period Filter -->
                           <div class="relative">
