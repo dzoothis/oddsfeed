@@ -120,10 +120,14 @@ class LiveMatchSyncJob implements ShouldQueue
             ]);
         }
 
+        // Remove finished matches from database
+        $finishedMatchesRemoved = $this->removeFinishedMatches($apiFootballService);
+
         Log::info('LiveMatchSyncJob completed successfully', [
             'processed_matches' => count($processedMatches),
             'leagues_updated' => count($matchesByLeague),
-            'available_for_betting_updated' => $availableForBettingUpdated
+            'available_for_betting_updated' => $availableForBettingUpdated,
+            'finished_matches_removed' => $finishedMatchesRemoved
         ]);
 
         } catch (\Exception $e) {
@@ -644,6 +648,67 @@ class LiveMatchSyncJob implements ShouldQueue
         ];
 
         return in_array($status, $liveStatuses);
+    }
+
+    /**
+     * Remove finished matches from database
+     */
+    private function removeFinishedMatches(ApiFootballService $apiFootballService): int
+    {
+        try {
+            // Get finished fixtures from API Football
+            $finishedFixtures = $apiFootballService->getFinishedFixtures();
+
+            if (empty($finishedFixtures['response'])) {
+                Log::info('No finished fixtures found for cleanup');
+                return 0;
+            }
+
+            $removedCount = 0;
+
+            foreach ($finishedFixtures['response'] as $fixture) {
+                $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
+                $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
+
+                // Try to find matching match in database
+                $match = SportsMatch::where('sportId', $this->sportId ?? 1)
+                    ->where(function($query) use ($homeTeam, $awayTeam) {
+                        $query->where(function($q) use ($homeTeam, $awayTeam) {
+                            $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
+                              ->where('awayTeam', 'like', '%' . $awayTeam . '%');
+                        })->orWhere(function($q) use ($homeTeam, $awayTeam) {
+                            $q->where('homeTeam', 'like', '%' . $awayTeam . '%')
+                              ->where('awayTeam', 'like', '%' . $homeTeam . '%');
+                        });
+                    })
+                    ->first();
+
+                if ($match) {
+                    Log::info('Removing finished match from database', [
+                        'match_id' => $match->eventId,
+                        'home_team' => $match->homeTeam,
+                        'away_team' => $match->awayTeam,
+                        'api_football_status' => $fixture['fixture']['status']['short']
+                    ]);
+
+                    $match->delete();
+                    $removedCount++;
+                }
+            }
+
+            Log::info('Finished matches cleanup completed', [
+                'finished_fixtures_checked' => count($finishedFixtures['response']),
+                'matches_removed' => $removedCount
+            ]);
+
+            return $removedCount;
+
+        } catch (\Exception $e) {
+            Log::error('Error during finished matches cleanup', [
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
     }
 
     /**

@@ -53,12 +53,13 @@ class ApiFootballService
         $this->baseUrl = $baseUrl;
     }
 
-    public function getFixtures($league = null, $season = null, $live = false)
+    public function getFixtures($league = null, $season = null, $live = false, $status = null)
     {
         $params = [];
         if ($league) $params['league'] = $league;
         if ($season) $params['season'] = $season;
         if ($live) $params['live'] = 'all';
+        if ($status) $params['status'] = $status;
 
         try {
             $response = $this->client->request('GET', $this->baseUrl . '/fixtures', [
@@ -97,6 +98,18 @@ class ApiFootballService
             ]);
             return [];
         }
+    }
+
+    /**
+     * Get finished matches for cleanup
+     */
+    public function getFinishedFixtures($date = null)
+    {
+        if (!$date) {
+            $date = date('Y-m-d');
+        }
+
+        return $this->getFixtures(null, null, false, 'FT');
     }
 
     public function getEvents($fixtureId)
