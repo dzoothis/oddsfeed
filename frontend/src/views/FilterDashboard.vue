@@ -25,6 +25,10 @@
               <p class="text-sm text-gray-600 mt-1">Filter by Sport and League to view live odds</p>
             </div>
             <div class="flex gap-3">
+              <button @click="openLeaguesModal"
+                class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors">
+                All Available Leagues
+              </button>
               <button @click="openBetTypesModal"
                 class="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors">
                 All Available Bet Types
@@ -246,6 +250,137 @@
         </div>
       </div>
 
+      <!-- Leagues Modal -->
+      <div v-if="showLeaguesModal" :key="leaguesModalTrigger" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click="closeLeaguesModal">
+        <div class="bg-white w-full max-w-6xl h-[85vh] rounded-lg shadow-sm border border-gray-200 flex flex-col"
+          @click.stop>
+
+          <!-- Header -->
+          <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900">All Available Leagues</h2>
+              <p class="text-sm text-gray-600 mt-1">
+                Browse leagues by sport
+              </p>
+            </div>
+            <button @click="closeLeaguesModal"
+              class="px-3 py-1 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">
+              Close
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="flex flex-1 overflow-hidden">
+
+            <!-- Left Panel: Sports -->
+            <aside class="w-64 border-r border-gray-200 bg-gray-50 flex flex-col">
+              <div class="px-4 py-3 border-b border-gray-200">
+                <h3 class="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Sports
+                </h3>
+              </div>
+
+              <div class="flex-1 overflow-y-auto p-3 space-y-2">
+                <div v-if="leaguesSports.length === 0" class="text-center py-6 text-gray-500 text-sm">
+                  Loading sports...
+                </div>
+
+                <button v-else v-for="sport in leaguesSports" :key="sport.id" @click="selectLeaguesSport(sport)"
+                  class="w-full px-3 py-2 text-sm font-medium rounded-lg text-left border transition-colors" :class="leaguesSelectedSport?.id === sport.id
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'">
+                  {{ sport.name }}
+                </button>
+              </div>
+            </aside>
+
+            <!-- Right Panel -->
+            <section class="flex-1 flex flex-col overflow-hidden">
+
+              <!-- Search -->
+              <div class="px-6 py-4 border-b border-gray-200 bg-white">
+                <div class="flex items-center gap-4">
+                  <div class="relative w-full max-w-sm">
+                    <input v-model="leaguesSearch" type="text" placeholder="Search leagues..."
+                      class="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <button v-if="leaguesSearch" @click="leaguesSearch = ''"
+                      class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Content -->
+              <div class="flex-1 overflow-y-auto p-6 bg-gray-50">
+
+                <!-- Empty States -->
+                <div v-if="!leaguesSelectedSport"
+                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                  Select a sport to view leagues
+                </div>
+
+                <div v-else-if="leaguesLoading"
+                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                  Loading leagues...
+                </div>
+
+                <div v-else-if="leaguesError"
+                  class="h-full flex items-center justify-center text-center">
+                  <div class="text-red-500 mb-4 text-4xl">⚠️</div>
+                  <p class="text-red-600 mb-4">{{ leaguesError }}</p>
+                  <button @click="selectLeaguesSport(leaguesSelectedSport)"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    Try Again
+                  </button>
+                </div>
+
+                <div v-else-if="filteredLeagues.length === 0"
+                  class="h-full flex items-center justify-center text-center">
+                  <div class="text-gray-400 mb-4 text-4xl">🏆</div>
+                  <h3 class="text-lg font-medium text-gray-900 mb-2">No leagues found</h3>
+                  <p class="text-gray-500">
+                    {{ leaguesSearch ? 'Try adjusting your search terms.' : 'No leagues available for this sport.' }}
+                  </p>
+                </div>
+
+                <!-- Leagues list -->
+                <div v-else class="space-y-3">
+                  <div v-for="league in filteredLeagues" :key="league.id"
+                    class="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors bg-white">
+                    <div class="flex items-center justify-between">
+                      <div class="flex-1">
+                        <h4 class="font-semibold text-gray-900">{{ league.name }}</h4>
+                        <p class="text-sm text-gray-600">{{ league.container }}</p>
+                        <div class="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                          <span>Events: {{ league.event_count || 0 }}</span>
+                          <span v-if="league.has_offerings" class="text-green-600 font-medium">Active</span>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="px-2 py-1 text-xs font-medium rounded-full"
+                          :class="league.has_offerings
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-gray-100 text-gray-800'">
+                          {{ league.has_offerings ? 'Available' : 'Inactive' }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -281,6 +416,16 @@ const betTypesLoading = ref(false)
 const betTypesError = ref('')
 const betTypesSearch = ref('')
 const modalTrigger = ref(0)
+
+// Leagues Modal
+const showLeaguesModal = ref(false)
+const leaguesSports = ref([])
+const leaguesSelectedSport = ref(null)
+const leaguesData = ref([])
+const leaguesLoading = ref(false)
+const leaguesError = ref('')
+const leaguesSearch = ref('')
+const leaguesModalTrigger = ref(0)
 
 // Manual Refresh
 const isRefreshing = ref(false)
@@ -343,6 +488,7 @@ const handleLogout = () => {
   allMatches.value = []
   allMatchesLoaded.value = false
   resetBetTypesState()
+  resetLeaguesState()
 }
 
 // Data fetching
@@ -351,18 +497,21 @@ const fetchSports = async () => {
     const response = await http.get(API_ENDPOINTS.SPORTS)
     sports.value = response.data.data || response.data || []
 
-    // Also fetch bet types sports for the modal
+    // Also fetch bet types and leagues sports for the modals
     try {
       const betTypesResponse = await http.get(API_ENDPOINTS.BET_TYPES.SPORTS)
       betTypesSports.value = betTypesResponse.data || []
+      leaguesSports.value = [...betTypesSports.value] // Use same sports list for leagues
     } catch (betTypesError) {
       console.error('Error fetching bet types sports:', betTypesError)
       betTypesSports.value = []
+      leaguesSports.value = []
     }
   } catch (error) {
     console.error('Error fetching sports:', error)
     sports.value = []
     betTypesSports.value = []
+    leaguesSports.value = []
   }
 }
 
@@ -482,6 +631,67 @@ const groupBetTypesByCategory = () => {
 
   return filteredCategories
 }
+
+// Leagues Modal functionality
+const openLeaguesModal = () => {
+  showLeaguesModal.value = true
+  leaguesSelectedSport.value = selectedSport.value ? { ...selectedSport.value } : null
+  if (leaguesSelectedSport.value) {
+    selectLeaguesSport(leaguesSelectedSport.value)
+  }
+}
+
+const closeLeaguesModal = () => {
+  showLeaguesModal.value = false
+  resetLeaguesState()
+}
+
+const resetLeaguesState = () => {
+  leaguesSelectedSport.value = null
+  leaguesData.value = []
+  leaguesLoading.value = false
+  leaguesError.value = ''
+  leaguesSearch.value = ''
+}
+
+const selectLeaguesSport = async (sport) => {
+  leaguesSelectedSport.value = { ...sport }
+  leaguesLoading.value = true
+  leaguesError.value = ''
+  leaguesSearch.value = ''
+
+  try {
+    const response = await http.get(API_ENDPOINTS.LEAGUES, {
+      params: {
+        sportId: sport.pinnacleId || sport.id,
+        per_page: 1000 // Request all leagues (set high limit)
+      }
+    })
+
+    leaguesData.value = response.data.data || response.data || []
+  } catch (error) {
+    console.error('Error fetching leagues:', error)
+    leaguesError.value = 'Failed to load leagues. Please try again.'
+    leaguesData.value = []
+  } finally {
+    leaguesLoading.value = false
+  }
+
+  leaguesModalTrigger.value++
+  await nextTick()
+}
+
+const filteredLeagues = computed(() => {
+  if (!leaguesSearch.value.trim()) {
+    return leaguesData.value
+  }
+
+  const searchTerm = leaguesSearch.value.toLowerCase().trim()
+  return leaguesData.value.filter(league =>
+    league.name?.toLowerCase().includes(searchTerm) ||
+    league.container?.toLowerCase().includes(searchTerm)
+  )
+})
 
 // Manual refresh functionality
 const manualRefresh = async () => {
