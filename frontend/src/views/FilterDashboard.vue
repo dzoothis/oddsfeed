@@ -43,12 +43,6 @@
               </div>
               <div class="flex gap-3">
                 <button
-                  @click="showSportsModal = true"
-                  class="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
-                >
-                  View All Sports
-                </button>
-                <button
                   @click="showBetTypesModal = true"
                   class="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
                 >
@@ -176,41 +170,6 @@
           :selected-match-type="selectedMatchType"
         />
 
-        <!-- Sports Modal -->
-        <div v-if="showSportsModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" @click="showSportsModal = false">
-          <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col" @click.stop>
-            <div class="flex items-center justify-between p-6 border-b border-gray-200">
-              <h2 class="text-xl font-semibold text-gray-900">Select Sport</h2>
-              <button
-                @click="showSportsModal = false"
-                class="text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none"
-              >
-                ×
-              </button>
-            </div>
-            <div class="flex-1 overflow-hidden p-6">
-              <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                <button
-                  v-for="sport in sports"
-                  :key="sport.id"
-                  @click="selectSport(sport)"
-                  class="p-4 border rounded-lg text-left hover:bg-blue-50 hover:border-blue-200 transition-colors"
-                  :class="selectedSport?.id === sport.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-700'"
-                >
-                  <div class="font-medium">{{ sport.name }}</div>
-                </button>
-              </div>
-            </div>
-            <div class="p-6 border-t border-gray-200 flex justify-end">
-              <button
-                @click="showSportsModal = false"
-                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>  
-        </div>
 
         <!-- Bet Types Modal -->
         <div v-if="showBetTypesModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" @click="closeBetTypesModal">
@@ -395,7 +354,6 @@ const matchTypeOptions = [
 ];
 
 // Modal state
-const showSportsModal = ref(false);
 const showBetTypesModal = ref(false);
 
 // Bet Types Modal state
@@ -630,7 +588,6 @@ const fetchSports = async () => {
 
 const selectSport = (sport) => {
   selectedSport.value = sport;
-  showSportsModal.value = false;
 
   // Clear league selections when sport changes
   selectedLeagues.value = [];
