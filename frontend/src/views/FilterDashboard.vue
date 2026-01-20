@@ -209,7 +209,7 @@
                 Done
               </button>
             </div>
-          </div>
+          </div>  
         </div>
 
         <!-- Bet Types Modal -->
@@ -288,6 +288,23 @@
                         </h3>
                       </div>
 
+                      <!-- Search Bar -->
+                      <div class="mb-6">
+                        <div class="relative">
+                          <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                          </div>
+                          <input
+                            type="text"
+                            v-model="betTypesSearch"
+                            placeholder="Search bet types..."
+                            class="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm placeholder-gray-400"
+                          />
+                        </div>
+                      </div>
+
                       <!-- Bet Types List Grouped by Category -->
                       <div class="space-y-6">
                         <div
@@ -295,9 +312,6 @@
                           :key="categoryName"
                           class="mb-6"
                         >
-                          <h4 class="text-lg font-semibold text-gray-800 mb-4 pb-2">
-                            {{ categoryName }}
-                          </h4>
                           <div class="space-y-3">
                             <div
                               v-for="betType in categoryGroup"
@@ -320,15 +334,6 @@
                         </div>
                       </div>
 
-                      <!-- Show More Button -->
-                      <div v-if="hasMoreBetTypes && !showAllBetTypes" class="mt-6 text-center">
-                        <button
-                          @click="showAllBetTypes = true"
-                          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                        >
-                          Show All Bet Types ({{ betTypesResponse.flat?.length || 0 }})
-                        </button>
-                      </div>
                     </div>
 
                     <!-- No Bet Types Message -->
@@ -398,7 +403,7 @@ const betTypesSelectedSport = ref('');
 const betTypesResponse = ref({ categories: {}, flat: [] });
 const betTypesLoading = ref(false);
 const betTypesError = ref('');
-const showAllBetTypes = ref(false);
+const betTypesSearch = ref('');
 
 // API Configuration - using centralized HTTP service
 
@@ -416,24 +421,38 @@ const showFilters = computed(() => {
 const groupBetTypesByCategory = () => {
   // Use the categories directly from the API response
   const categories = betTypesResponse.value.categories || {};
+  const searchTerm = betTypesSearch.value.toLowerCase().trim();
 
-  // If showAllBetTypes is false, limit to first few categories
-  if (!showAllBetTypes.value) {
-    const categoryNames = Object.keys(categories);
-    const limitedCategories = {};
-    categoryNames.slice(0, 3).forEach(catName => {
-      limitedCategories[catName] = categories[catName];
-    });
-    return limitedCategories;
+  if (!searchTerm) {
+    // Show all categories if no search term
+    return categories;
   }
 
-  return categories;
+  // Filter categories and bet types based on search term
+  const filteredCategories = {};
+
+  Object.keys(categories).forEach(categoryName => {
+    const categoryBetTypes = categories[categoryName];
+
+    // Check if category name matches search
+    const categoryMatches = categoryName.toLowerCase().includes(searchTerm);
+
+    // Filter bet types within this category
+    const filteredBetTypes = categoryBetTypes.filter(betType => {
+      const nameMatches = betType.name.toLowerCase().includes(searchTerm);
+      const descriptionMatches = betType.description.toLowerCase().includes(searchTerm);
+      return nameMatches || descriptionMatches;
+    });
+
+    // Include category if category name matches OR if it has any matching bet types
+    if (categoryMatches || filteredBetTypes.length > 0) {
+      filteredCategories[categoryName] = filteredBetTypes;
+    }
+  });
+
+  return filteredCategories;
 };
 
-const hasMoreBetTypes = computed(() => {
-  const categories = betTypesResponse.value.categories || {};
-  return Object.keys(categories).length > 3;
-});
 
 // Watch for league changes to trigger matches loading
 watch(() => selectedLeagues.value, (newLeagues) => {
@@ -676,13 +695,14 @@ const resetBetTypesState = () => {
   betTypesResponse.value = { categories: {}, flat: [] };
   betTypesLoading.value = false;
   betTypesError.value = '';
-  showAllBetTypes.value = false;
+  betTypesSearch.value = '';
 };
 
 const selectSportForBetTypes = async (sportId) => {
   betTypesSelectedSport.value = sportId;
   betTypesLoading.value = true;
   betTypesError.value = '';
+  betTypesSearch.value = ''; // Clear search when selecting new sport
 
   try {
     const response = await http.get(API_ENDPOINTS.REFERENCE.BET_TYPES, {
