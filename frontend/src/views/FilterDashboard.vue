@@ -400,6 +400,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import http from '../services/http.js'
 import { API_ENDPOINTS } from '../services/api.js'
 import MatchesDisplay from '../components/MatchesDisplay.vue'
+import Swal from 'sweetalert2'
 
 // Authentication
 const isAuthenticated = ref(localStorage.getItem('isAuthenticated') === 'true')
@@ -487,7 +488,12 @@ const handleLogin = async () => {
     localStorage.setItem('isAuthenticated', 'true')
     await fetchSports()
   } else {
-    alert('Invalid password')
+    await Swal.fire({
+      icon: 'error',
+      title: 'Access Denied',
+      text: 'Invalid password. Please try again.',
+      confirmButtonColor: '#EF4444'
+    })
   }
 }
 
@@ -742,7 +748,14 @@ const manualRefresh = async () => {
     console.log('Manual refresh response:', response.data)
 
     // Show success message with sport name
-    alert(`Data refresh initiated for ${selectedSport.value.name}! Matches and odds will be updated shortly.`)
+    await Swal.fire({
+      icon: 'success',
+      title: 'Refresh Initiated!',
+      text: `Data refresh initiated for ${selectedSport.value.name}! Matches and odds will be updated shortly.`,
+      confirmButtonColor: '#10B981',
+      timer: 3000,
+      timerProgressBar: true
+    })
 
     // Reload matches after a short delay
     setTimeout(() => {
@@ -751,7 +764,12 @@ const manualRefresh = async () => {
 
   } catch (error) {
     console.error('Manual refresh failed:', error)
-    alert(`Failed to refresh ${selectedSport.value.name} data. Please try again.`)
+    await Swal.fire({
+      icon: 'error',
+      title: 'Refresh Failed',
+      text: `Failed to refresh ${selectedSport.value.name} data. Please try again.`,
+      confirmButtonColor: '#EF4444'
+    })
   } finally {
     isRefreshing.value = false
   }
