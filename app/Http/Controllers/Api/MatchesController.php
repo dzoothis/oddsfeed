@@ -245,6 +245,19 @@ class MatchesController extends Controller
             }
             // 'all' type includes both
 
+            // Exclude finished matches (matches that are not live and have no open markets)
+            $query->where(function($q) {
+                $q->where('live_status_id', '>', 0) // Either actively live
+                  ->orWhere('hasOpenMarkets', true); // Or have open betting markets
+            });
+
+            Log::debug('Matches query filters applied', [
+                'sportId' => $sportId,
+                'matchType' => $matchType,
+                'leagueIds' => $leagueIds,
+                'exclude_finished_matches' => true
+            ]);
+
             $matches = $query->get();
 
             if ($matches->isNotEmpty()) {

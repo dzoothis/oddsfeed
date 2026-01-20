@@ -72,7 +72,7 @@
                     <div class="text-2xl font-bold text-gray-400 mb-1">VS</div>
                     <span :class="['inline-flex items-center px-2 py-1 text-xs font-medium rounded-full',
                       match.match_type === 'live' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800']">
-                      {{ match.match_type === 'live' ? 'LIVE' : 'UPCOMING' }}
+                      {{ match.match_type === 'live' ? 'LIVE' : 'PREMATCH' }}
                     </span>
                   </div>
                 </div>
