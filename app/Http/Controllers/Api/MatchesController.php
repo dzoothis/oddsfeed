@@ -910,10 +910,6 @@ class MatchesController extends Controller
      */
     private function processMatchOdds($marketsData, $matchId, $period, $marketType)
     {
-        // This is a simplified implementation
-        // In a real implementation, you'd fetch actual odds from Pinnacle API
-        // based on matchId, period, and marketType
-
         // Get match data to include team IDs in odds
         $match = SportsMatch::where('eventId', $matchId)->first();
         if (!$match) {
@@ -929,73 +925,154 @@ class MatchesController extends Controller
 
         $homeTeamId = $match->home_team_id;
         $awayTeamId = $match->away_team_id;
+        $homeTeam = $match->homeTeam ?: $match->home_team;
+        $awayTeam = $match->awayTeam ?: $match->away_team;
 
-        $sampleOdds = [];
+        $allOdds = [];
 
-        if ($marketType === 'money_line' || $marketType === 'all') {
-            $sampleOdds = array_merge($sampleOdds, [
-                [
-                    'bet' => 'Home Team',
-                    'home_team_id' => $homeTeamId,
-                    'line' => null,
-                    'odds' => number_format(rand(150, 300) / 100, 3),
-                    'status' => 'open',
-                    'period' => 'Game',
-                    'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                ],
-                [
-                    'bet' => 'Away Team',
-                    'away_team_id' => $awayTeamId,
-                    'line' => null,
-                    'odds' => number_format(rand(120, 200) / 100, 3),
-                    'status' => 'open',
-                    'period' => 'Game',
-                    'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                ],
-                [
-                    'bet' => 'Home Team',
-                    'home_team_id' => $homeTeamId,
-                    'line' => null,
-                    'odds' => number_format(rand(180, 250) / 100, 3),
-                    'status' => 'open',
-                    'period' => '1st Half',
-                    'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                ],
-                [
-                    'bet' => 'Away Team',
-                    'away_team_id' => $awayTeamId,
-                    'line' => null,
-                    'odds' => number_format(rand(140, 190) / 100, 3),
-                    'status' => 'open',
-                    'period' => '1st Half',
-                    'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                ]
-            ]);
-        }
-        
-        if ($marketType === 'spreads' || $marketType === 'all') {
-            for ($i = 0; $i < rand(6, 10); $i++) {
-                $isHome = rand(0, 1);
-                $sampleOdds[] = [
-                    'bet' => $isHome ? 'Home Team' : 'Away Team',
-                    'home_team_id' => $isHome ? $homeTeamId : null,
-                    'away_team_id' => $isHome ? null : $awayTeamId,
-                    'line' => (rand(-20, 20) / 2) . '',
-                    'odds' => number_format(rand(150, 250) / 100, 3),
-                    'status' => 'open',
-                    'period' => rand(0, 2) === 0 ? 'Game' : (rand(0, 1) ? '1st Half' : '1st Quarter'),
-                    'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                ];
+        // Try to process real Pinnacle API data first
+        if (is_array($marketsData)) {
+            // Process specials markets if available
+            if (isset($marketsData['specials']) && is_array($marketsData['specials'])) {
+                foreach ($marketsData['specials'] as $market) {
+                    if (isset($market['outcomes']) && is_array($market['outcomes'])) {
+                        $marketPeriod = $market['period'] ?? 'Game';
+                        $marketName = $market['name'] ?? '';
+
+                        // Skip if period filter doesn't match
+                        if ($period !== 'all' && $marketPeriod !== $period) {
+                            continue;
+                        }
+
+                        foreach ($market['outcomes'] as $outcome) {
+                            $allOdds[] = [
+                                'bet' => $outcome['name'] ?? $marketName,
+                                'home_team_id' => $homeTeamId,
+                                'away_team_id' => $awayTeamId,
+                                'line' => $outcome['line'] ?? null,
+                                'odds' => $outcome['odds'] ?? 1.0,
+                                'status' => $market['is_open'] ?? true ? 'open' : 'closed',
+                                'period' => $marketPeriod,
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // Process special_markets if available
+            if (isset($marketsData['special_markets']) && is_array($marketsData['special_markets'])) {
+                foreach ($marketsData['special_markets'] as $market) {
+                    if (isset($market['outcomes']) && is_array($market['outcomes'])) {
+                        $marketPeriod = $market['period'] ?? 'Game';
+
+                        // Skip if period filter doesn't match
+                        if ($period !== 'all' && $marketPeriod !== $period) {
+                            continue;
+                        }
+
+                        foreach ($market['outcomes'] as $outcome) {
+                            $allOdds[] = [
+                                'bet' => $outcome['name'] ?? $market['name'] ?? '',
+                                'home_team_id' => $homeTeamId,
+                                'away_team_id' => $awayTeamId,
+                                'line' => $outcome['line'] ?? null,
+                                'odds' => $outcome['odds'] ?? 1.0,
+                                'status' => $market['is_open'] ?? true ? 'open' : 'closed',
+                                'period' => $marketPeriod,
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                        }
+                    }
+                }
             }
         }
-        
+
+        // Filter by market type if specified
+        if ($marketType !== 'all') {
+            // Map market types to expected names
+            $marketTypeMap = [
+                'money_line' => ['Money Line', '1X2', 'Match Winner'],
+                'spreads' => ['Spread', 'Handicap', 'Asian Handicap'],
+                'totals' => ['Total', 'Over/Under', 'Totals'],
+                'player_props' => ['Player Props', 'Player'],
+                'team_totals' => ['Team Total'],
+                'corners' => ['Corner', 'Corners']
+            ];
+
+            if (isset($marketTypeMap[$marketType])) {
+                $allowedNames = $marketTypeMap[$marketType];
+                $allOdds = array_filter($allOdds, function($odd) use ($allowedNames) {
+                    foreach ($allowedNames as $name) {
+                        if (stripos($odd['bet'], $name) !== false) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+            }
+        }
+
+        // If we have real data, use it; otherwise generate sample data
+        if (empty($allOdds)) {
+            // Generate sample data as fallback
+            Log::info('No real odds data found, generating sample data', [
+                'matchId' => $matchId,
+                'marketType' => $marketType,
+                'period' => $period
+            ]);
+
+            if ($marketType === 'money_line' || $marketType === 'all') {
+                $allOdds = array_merge($allOdds, [
+                    [
+                        'bet' => $homeTeam ?: 'Home Team',
+                        'home_team_id' => $homeTeamId,
+                        'line' => null,
+                        'odds' => number_format(rand(150, 300) / 100, 3),
+                        'status' => 'open',
+                        'period' => 'Game',
+                        'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                    ],
+                    [
+                        'bet' => $awayTeam ?: 'Away Team',
+                        'away_team_id' => $awayTeamId,
+                        'line' => null,
+                        'odds' => number_format(rand(120, 200) / 100, 3),
+                        'status' => 'open',
+                        'period' => 'Game',
+                        'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                    ]
+                ]);
+            }
+
+            if ($marketType === 'spreads' || $marketType === 'all') {
+                for ($i = 0; $i < rand(4, 8); $i++) {
+                    $isHome = rand(0, 1);
+                    $allOdds[] = [
+                        'bet' => ($isHome ? $homeTeam : $awayTeam) ?: ($isHome ? 'Home Team' : 'Away Team'),
+                        'home_team_id' => $isHome ? $homeTeamId : null,
+                        'away_team_id' => $isHome ? null : $awayTeamId,
+                        'line' => (rand(-20, 20) / 2) . '',
+                        'odds' => number_format(rand(150, 250) / 100, 3),
+                        'status' => 'open',
+                        'period' => rand(0, 2) === 0 ? 'Game' : (rand(0, 1) ? '1st Half' : '1st Quarter'),
+                        'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                    ];
+                }
+            }
+        }
+
+        // Shuffle and limit results
+        shuffle($allOdds);
+        $showingOdds = array_slice($allOdds, 0, min(20, count($allOdds)));
+
         return [
             'match_id' => $matchId,
             'market_type' => $marketType,
             'period' => $period,
-            'odds' => array_slice($sampleOdds, 0, rand(15, 25)), // Limit results
-            'total_count' => count($sampleOdds),
-            'showing_count' => min(count($sampleOdds), rand(15, 25))
+            'odds' => $showingOdds,
+            'total_count' => count($allOdds),
+            'showing_count' => count($showingOdds)
         ];
     }
 

@@ -99,37 +99,11 @@
                   d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
             </div>
-            <button v-if="matchSearchTerm" @click="matchSearchTerm = ''"
-              class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
-              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
           </div>
         </div>
 
-        <div class="space-y-4">
-          <div v-for="match in filteredMatches" :key="match.id" :class="['border rounded-lg p-4',
-            match.match_type === 'live' ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white']">
-            <div class="flex justify-between items-center">
-              <div class="flex-1">
-                <div class="flex items-center gap-3 mb-2">
-                  <div class="font-semibold">{{ match.home_team }} vs {{ match.away_team }}</div>
-                  <span
-                    :class="['inline-flex items-center px-2 py-1 text-xs font-medium rounded-full',
-                      match.match_type === 'live' ? 'bg-red-100 text-red-800 animate-pulse' : 'bg-blue-100 text-blue-800']">
-                    {{ match.match_type === 'live' ? '🔴 LIVE' : '⏰ PREMATCH' }}
-                  </span>
-                </div>
-                <div class="text-sm text-gray-600">League: {{ match.league_name }}</div>
-              </div>
-              <div class="text-sm text-gray-500 text-right">
-                <div>{{ formatMatchTime(match) }}</div>
-                <div v-if="match.match_type === 'live'" class="text-red-600 font-medium animate-pulse">LIVE NOW</div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Matches Display -->
+        <MatchesDisplay :matches="filteredMatches" :selected-sport="selectedSport" :loading="loadingMatches" />
       </div>
 
       <!-- Bet Types Modal -->
@@ -137,6 +111,7 @@
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click="closeBetTypesModal">
         <div class="bg-white w-full max-w-5xl h-[85vh] rounded-lg shadow-sm border border-gray-200 flex flex-col"
           @click.stop>
+
 
           <!-- Header -->
           <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -197,6 +172,10 @@
                       ✕
                     </button>
                   </div>
+
+                  <div v-if="betTypesSelectedSport" class="text-sm text-gray-600">
+                    {{ betTypesSelectedSport.name }}
+                  </div>
                 </div>
               </div>
 
@@ -255,498 +234,250 @@
         </div>
       </div>
 
-
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch, nextTick } from 'vue';
-import http from '../services/http.js';
-import { API_ENDPOINTS, API_PARAMS } from '../services/api.js';
-import MatchesDisplay from '../components/MatchesDisplay.vue';
+import { ref, computed, onMounted, nextTick } from 'vue'
+import http from '../services/http.js'
+import { API_ENDPOINTS } from '../services/api.js'
+import MatchesDisplay from '../components/MatchesDisplay.vue'
 
 // Authentication
-const isAuthenticated = ref(false);
-const password = ref('');
+const isAuthenticated = ref(false)
+const password = ref('')
 
 // Data
-const sports = ref([]);
-const betTypesSports = ref([]);
-const selectedSport = ref(null);
+const sports = ref([])
+const selectedSport = ref(null)
 
-// League filtering state
-const leagueSearch = ref('');
-const showLeagueDropdown = ref(false);
-const selectedLeagues = ref([]);
-const filteredLeagues = ref([]);
-const leagues = ref([]);
-const loadingLeagues = ref(false);
+// Match management
+const allMatches = ref([])
+const allMatchesLoaded = ref(false)
+const loadingMatches = ref(false)
+const matchTypeFilter = ref('all')
+const matchSearchTerm = ref('')
+const pageTrigger = ref(0)
 
-// Match type filtering state
-const selectedMatchType = ref('all');
-const matchTypeOptions = [
-  { key: 'all', name: 'All Matches' },
-  { key: 'live', name: 'Live Matches' },
-  { key: 'prematch', name: 'Prematch Matches' }
-];
+// Bet Types Modal
+const showBetTypesModal = ref(false)
+const betTypesSports = ref([])
+const betTypesSelectedSport = ref(null)
+const betTypesResponse = ref({})
+const betTypesLoading = ref(false)
+const betTypesError = ref('')
+const betTypesSearch = ref('')
+const modalTrigger = ref(0)
 
-// Match loading and filtering state
-const allMatchesLoaded = ref(false);
-const loadingMatches = ref(false);
-const allMatches = ref([]);
-const matchTypeFilter = ref('all');
-const matchSearchTerm = ref('');
-const pageTrigger = ref(0); // Force re-render trigger for main page
+// Computed properties
+const liveMatchesCount = computed(() =>
+  allMatches.value.filter(match => match.match_type === 'live').length
+)
 
-// Modal state
-const showBetTypesModal = ref(false);
-const betTypesResponse = ref(null);
-const betTypesSelectedSport = ref(null);
-const betTypesSearch = ref('');
-const modalTrigger = ref(0); // Force re-render trigger
+const upcomingMatchesCount = computed(() =>
+  allMatches.value.filter(match => match.match_type === 'prematch').length
+)
 
 const filteredMatches = computed(() => {
-  let matches = [...leagueFilteredMatches.value];
+  let matches = [...allMatches.value]
 
   // Filter by match type
   if (matchTypeFilter.value !== 'all') {
-    matches = matches.filter(match => match.match_type === matchTypeFilter.value);
+    matches = matches.filter(match => match.match_type === matchTypeFilter.value)
   }
 
   // Filter by search term
   if (matchSearchTerm.value.trim()) {
-    const searchTerm = matchSearchTerm.value.toLowerCase().trim();
+    const search = matchSearchTerm.value.toLowerCase()
     matches = matches.filter(match => {
-      const homeTeam = match.home_team?.toLowerCase() || '';
-      const awayTeam = match.away_team?.toLowerCase() || '';
-      const leagueName = match.league_name?.toLowerCase() || '';
+      const homeTeam = match.home_team?.toLowerCase() || ''
+      const awayTeam = match.away_team?.toLowerCase() || ''
+      const league = match.league_name?.toLowerCase() || ''
 
-      return homeTeam.includes(searchTerm) ||
-        awayTeam.includes(searchTerm) ||
-        leagueName.includes(searchTerm);
-    });
+      return homeTeam.includes(search) ||
+        awayTeam.includes(search) ||
+        league.includes(search) ||
+        `${homeTeam} vs ${awayTeam}`.includes(search)
+    })
   }
 
-  // Sort matches: Live matches first, then pre-match matches by time (earliest first)
-  matches.sort((a, b) => {
-    // Live matches always come first
-    if (a.match_type === 'live' && b.match_type !== 'live') return -1;
-    if (b.match_type === 'live' && a.match_type !== 'live') return 1;
-
-    // If both are live or both are pre-match, sort by time
-    const aTime = new Date(a.scheduled_time).getTime();
-    const bTime = new Date(b.scheduled_time).getTime();
-
-    // Handle invalid dates
-    if (isNaN(aTime) && isNaN(bTime)) return 0;
-    if (isNaN(aTime)) return 1;
-    if (isNaN(bTime)) return -1;
-
-    return aTime - bTime; // Earliest first
-  });
-
-  return matches;
-});
-
-const leagueFilteredMatches = computed(() => {
-  let matches = allMatches.value;
-
-  // Apply league filtering only
-  if (selectedLeagues.value.length > 0) {
-    const selectedLeagueIds = selectedLeagues.value.map(league => league.id);
-    matches = matches.filter(match => selectedLeagueIds.includes(match.league_id));
-  }
-
-  return matches;
-});
-
-const liveMatchesCount = computed(() => {
-  return leagueFilteredMatches.value.filter(match => match.match_type === 'live').length;
-});
-
-const upcomingMatchesCount = computed(() => {
-  return leagueFilteredMatches.value.filter(match => match.match_type === 'prematch').length;
-});
+  return matches
+})
 
 const filteredBetTypesCategories = computed(() => {
-  if (!betTypesSelectedSport.value || !betTypesResponse.value) {
-    return {};
-  }
-
-  const categories = {};
-  const responseCategories = betTypesResponse.value.categories || {};
-
-  // Get bet types for the selected sport
-  Object.entries(responseCategories).forEach(([category, betTypes]) => {
-    const filteredBetTypes = betTypes.filter(betType => {
-      if (!betTypesSearch.value.trim()) return true;
-
-      const searchTerm = betTypesSearch.value.toLowerCase().trim();
-      const name = betType.name?.toLowerCase() || '';
-      const description = betType.description?.toLowerCase() || '';
-
-      return name.includes(searchTerm) || description.includes(searchTerm);
-    });
-
-    if (filteredBetTypes.length > 0) {
-      categories[category] = filteredBetTypes;
-    }
-  });
-
-  return categories;
-});
+  return groupBetTypesByCategory()
+})
 
 // Authentication
 const handleLogin = async () => {
   if (password.value === 'sportsfeed2025') {
-    isAuthenticated.value = true;
-    localStorage.setItem('isAuthenticated', 'true');
-    await fetchSports();
+    isAuthenticated.value = true
+    localStorage.setItem('isAuthenticated', 'true')
+    await fetchSports()
   } else {
-    alert('Invalid password');
+    alert('Invalid password')
   }
-};
+}
 
 const handleLogout = () => {
-  isAuthenticated.value = false;
-  localStorage.removeItem('isAuthenticated');
-  password.value = '';
-  selectedSport.value = null;
-  leagues.value = [];
-  selectedLeagues.value = [];
-  allMatchesLoaded.value = false;
-  allMatches.value = [];
-  activeMatchTypeFilter.value = 'all';
-};
-
-// League filtering methods
-const handleLeagueSearch = async () => {
-  if (!selectedSport.value) return;
-
-  showLeagueDropdown.value = true;
-  await filterLeagues();
-};
-
-const handleLeagueFocus = () => {
-  if (!selectedSport.value) return;
-  showLeagueDropdown.value = true;
-  loadLeaguesForSport();
-};
-
-const handleLeagueBlur = () => {
-  setTimeout(() => {
-    showLeagueDropdown.value = false;
-  }, 200);
-};
-
-const loadLeaguesForSport = async () => {
-  if (!selectedSport.value) return;
-
-  loadingLeagues.value = true;
-
-  try {
-    if (leagueSearch.value.trim()) {
-      const response = await http.get(API_ENDPOINTS.REFERENCE.LEAGUES_SEARCH, {
-        params: {
-          sportId: selectedSport.value.id,
-          search: leagueSearch.value.trim(),
-          limit: 50
-        }
-      });
-      leagues.value = response.data.leagues || [];
-    } else {
-      await fetchLeagues();
-    }
-    await filterLeagues();
-  } catch (error) {
-    console.error('Error loading leagues:', error);
-    leagues.value = [];
-  } finally {
-    loadingLeagues.value = false;
-  }
-};
-
-const filterLeagues = async () => {
-  if (!leagueSearch.value) {
-    filteredLeagues.value = leagues.value.slice(0, 10);
-    return;
-  }
-
-  filteredLeagues.value = leagues.value
-    .filter(league => matchesLeagueSearch(league, leagueSearch.value))
-    .sort((a, b) => calculateSearchScore(b, leagueSearch.value) - calculateSearchScore(a, leagueSearch.value))
-    .slice(0, 20);
-};
-
-const matchesLeagueSearch = (league, search) => {
-  if (!search) return true;
-
-  const name = league.name.toLowerCase();
-  const query = search.toLowerCase();
-
-  if (name === query) return true;
-  if (name.startsWith(query)) return true;
-  if (name.includes(' ' + query) || name.includes(query + ' ')) return true;
-  if (name.includes(query)) return true;
-
-  const nameWords = name.split(' ');
-  return nameWords.some(word => word.startsWith(query));
-};
-
-const calculateSearchScore = (league, search) => {
-  const name = league.name.toLowerCase();
-  const query = search.toLowerCase();
-
-  if (name === query) return 100;
-  if (name.startsWith(query)) return 80;
-  if (name.includes(' ' + query + ' ')) return 60;
-  if (name.includes(query)) return 40;
-
-  const nameWords = name.split(' ');
-  if (nameWords.some(word => word.startsWith(query))) return 20;
-
-  return 0;
-};
-
-const selectLeague = (league) => {
-  const isSelected = selectedLeagues.value.find(l => l.id === league.id);
-
-  if (isSelected) {
-    selectedLeagues.value = selectedLeagues.value.filter(l => l.id !== league.id);
-  } else {
-    selectedLeagues.value.push(league);
-  }
-
-  leagueSearch.value = '';
-  showLeagueDropdown.value = false;
-};
-
-const removeLeague = (league) => {
-  selectedLeagues.value = selectedLeagues.value.filter(l => l.id !== league.id);
-};
-
-const isLeagueSelected = (league) => {
-  return selectedLeagues.value.some(l => l.id === league.id);
-};
-
-const selectMatchType = (matchType) => {
-  selectedMatchType.value = matchType;
-};
+  isAuthenticated.value = false
+  localStorage.removeItem('isAuthenticated', '')
+  password.value = ''
+  selectedSport.value = null
+  allMatches.value = []
+  allMatchesLoaded.value = false
+  resetBetTypesState()
+}
 
 // Data fetching
 const fetchSports = async () => {
   try {
-    const response = await http.get(API_ENDPOINTS.SPORTS);
+    const response = await http.get(API_ENDPOINTS.SPORTS)
+    sports.value = response.data.data || response.data || []
 
-    if (response.data.data && Array.isArray(response.data.data)) {
-      sports.value = response.data.data;
-    } else if (response.data && Array.isArray(response.data)) {
-      sports.value = response.data;
-    } else if (response.data && Array.isArray(response.data.sports)) {
-      sports.value = response.data.sports;
-    } else {
-      sports.value = [];
-    }
-
+    // Also fetch bet types sports for the modal
     try {
-      const betTypesResponse = await http.get(API_ENDPOINTS.BET_TYPES.SPORTS);
-      betTypesSports.value = betTypesResponse.data || [];
-    } catch (error) {
-      console.error('Error loading bet types sports:', error);
-      betTypesSports.value = [];
+      const betTypesResponse = await http.get(API_ENDPOINTS.BET_TYPES.SPORTS)
+      betTypesSports.value = betTypesResponse.data || []
+    } catch (betTypesError) {
+      console.error('Error fetching bet types sports:', betTypesError)
+      betTypesSports.value = []
     }
   } catch (error) {
-    console.error('Error fetching sports:', error);
-    sports.value = [];
+    console.error('Error fetching sports:', error)
+    sports.value = []
+    betTypesSports.value = []
   }
-};
+}
 
 const selectSport = async (sport) => {
-  selectedSport.value = { ...sport }; // Force reactivity
-  pageTrigger.value++; // Force re-render
-
-  selectedLeagues.value = [];
-  leagueSearch.value = '';
-  leagues.value = [];
-
-  allMatchesLoaded.value = false;
-  allMatches.value = [];
-  matchTypeFilter.value = 'all';
-  matchSearchTerm.value = '';
-
-  await nextTick(); // Wait for DOM update
-  fetchLeagues();
-};
-
-const fetchLeagues = async () => {
-  if (!selectedSport.value) return;
-
-  loadingLeagues.value = true;
-  try {
-    const popularSearches = ['NBA', 'NHL', 'MLB', 'NFL', 'WNBA', 'NCAAB', 'NCAAF'];
-
-    let allLeagues = [];
-
-    for (const searchTerm of popularSearches) {
-      try {
-        const response = await http.get(API_ENDPOINTS.REFERENCE.LEAGUES_SEARCH, {
-          params: {
-            sportId: selectedSport.value.id,
-            search: searchTerm,
-            limit: 10
-          }
-        });
-
-        if (response.data.leagues && response.data.leagues.length > 0) {
-          allLeagues = allLeagues.concat(response.data.leagues);
-        }
-      } catch (error) {
-        console.error(`Error searching for ${searchTerm}:`, error);
-      }
-    }
-
-    const uniqueLeagues = allLeagues.filter((league, index, self) =>
-      index === self.findIndex(l => l.id === league.id)
-    );
-
-    leagues.value = uniqueLeagues;
-  } catch (error) {
-    console.error('Error fetching leagues:', error);
-    leagues.value = [];
-  } finally {
-    loadingLeagues.value = false;
-  }
-};
+  selectedSport.value = { ...sport }
+  allMatchesLoaded.value = false
+  allMatches.value = []
+  matchTypeFilter.value = 'all'
+  matchSearchTerm.value = ''
+  pageTrigger.value++
+  await nextTick()
+}
 
 const loadAllMatchesForSport = async () => {
-  if (!selectedSport.value) return;
+  if (!selectedSport.value) return
 
-  loadingMatches.value = true;
-
+  loadingMatches.value = true
   try {
     const response = await http.post(API_ENDPOINTS.MATCHES, {
-      sport_id: selectedSport.value.pinnacleId || selectedSport.value.id,
-    });
+      sport_id: selectedSport.value.pinnacleId || selectedSport.value.id
+    })
 
-    allMatches.value = response.data.matches || [];
-    allMatchesLoaded.value = true;
+    allMatches.value = response.data.matches || []
 
-    console.log(`Loaded ${allMatches.value.length} matches for sport ${selectedSport.value.name}`);
+    // Sort matches: live first, then by date
+    allMatches.value.sort((a, b) => {
+      if (a.match_type === 'live' && b.match_type !== 'live') return -1
+      if (b.match_type === 'live' && a.match_type !== 'live') return 1
+
+      // For same type, sort by time
+      const aTime = new Date(a.scheduled_time || a.last_updated || '2026-01-01')
+      const bTime = new Date(b.scheduled_time || b.last_updated || '2026-01-01')
+      return aTime - bTime
+    })
+
+    allMatchesLoaded.value = true
+
+    console.log(`Loaded ${allMatches.value.length} matches for ${selectedSport.value.name}`)
   } catch (error) {
-    console.error('Error loading matches:', error);
-    allMatches.value = [];
+    console.error('Error loading matches:', error)
+    allMatches.value = []
   } finally {
-    loadingMatches.value = false;
+    loadingMatches.value = false
   }
-};
+}
 
-const setMatchTypeFilter = (matchType) => {
-  matchTypeFilter.value = matchType;
-};
+// Match type filtering
+const setMatchTypeFilter = (type) => {
+  matchTypeFilter.value = type
+}
 
-const clearFilters = () => {
-  selectedLeagues.value = [];
-  matchTypeFilter.value = 'all';
-  leagueSearch.value = '';
-  matchSearchTerm.value = '';
-};
 
+// Bet Types Modal
 const openBetTypesModal = () => {
-  showBetTypesModal.value = true;
-  betTypesSearch.value = '';
-  betTypesResponse.value = null;
-  modalTrigger.value = 0; // Reset trigger
-
-  // Pre-select the currently selected sport if any
-  if (selectedSport.value) {
-    betTypesSelectedSport.value = selectedSport.value;
-    // Load bet types for the pre-selected sport
-    selectBetTypesSport(selectedSport.value);
+  showBetTypesModal.value = true
+  betTypesSelectedSport.value = selectedSport.value ? { ...selectedSport.value } : null
+  if (betTypesSelectedSport.value) {
+    selectBetTypesSport(betTypesSelectedSport.value)
   }
-};
+}
 
 const closeBetTypesModal = () => {
-  showBetTypesModal.value = false;
-  betTypesSelectedSport.value = null;
-  betTypesSearch.value = '';
-  betTypesResponse.value = null;
-  modalTrigger.value = 0;
-};
+  showBetTypesModal.value = false
+  resetBetTypesState()
+}
+
+const resetBetTypesState = () => {
+  betTypesSelectedSport.value = null
+  betTypesResponse.value = {}
+  betTypesLoading.value = false
+  betTypesError.value = ''
+  betTypesSearch.value = ''
+}
 
 const selectBetTypesSport = async (sport) => {
-  betTypesSelectedSport.value = { ...sport };
-  modalTrigger.value++; // Force re-render
-
-  await nextTick(); // Force DOM update
-
-  betTypesResponse.value = null; // Reset while loading
+  betTypesSelectedSport.value = { ...sport }
+  betTypesLoading.value = true
+  betTypesError.value = ''
+  betTypesSearch.value = ''
 
   try {
-    const sportId = sport.pinnacleId || sport.id;
     const response = await http.get(API_ENDPOINTS.REFERENCE.BET_TYPES, {
-      params: { sportId: sportId }
-    });
-    betTypesResponse.value = { ...response.data };
-    modalTrigger.value++; // Force final re-render
+      params: { sportId: sport.pinnacleId || sport.id }
+    })
 
-    await nextTick();
+    betTypesResponse.value = { ...response.data }
   } catch (error) {
-    console.error('Error fetching bet types:', error);
-    betTypesResponse.value = {}; // Set to empty object to indicate we tried
-    modalTrigger.value++; // Force re-render on error
-    await nextTick();
-  }
-};
-
-const formatMatchTime = (match) => {
-  if (match.match_type === 'live') {
-    return 'Live Now';
+    betTypesError.value = 'Failed to load bet types'
+    console.error('Error loading bet types:', error)
+  } finally {
+    betTypesLoading.value = false
   }
 
-  if (!match.scheduled_time || match.scheduled_time === 'TBD') {
-    return 'TBD';
-  }
+  modalTrigger.value++
+  await nextTick()
+}
 
-  // Handle the format "01/16/2026, 03:10:00"
-  if (match.scheduled_time.includes(',')) {
-    const parts = match.scheduled_time.split(', ');
-    if (parts.length === 2) {
-      const datePart = parts[0];
-      const timePart = parts[1];
+const groupBetTypesByCategory = () => {
+  const categories = betTypesResponse.value.categories || {}
+  const searchTerm = betTypesSearch.value.toLowerCase().trim()
 
-      const date = new Date(datePart + ' ' + timePart);
-      if (!isNaN(date.getTime())) {
-        const now = new Date();
-        const matchDate = new Date(date);
+  if (!searchTerm) return categories
 
-        // If same day, just show time
-        if (matchDate.toDateString() === now.toDateString()) {
-          return `Today ${timePart}`;
-        }
+  const filteredCategories = {}
+  Object.keys(categories).forEach(categoryName => {
+    const categoryBetTypes = categories[categoryName]
+    const filteredBetTypes = categoryBetTypes.filter(betType => {
+      const nameMatch = betType.name.toLowerCase().includes(searchTerm)
+      const descMatch = betType.description?.toLowerCase().includes(searchTerm)
+      return nameMatch || descMatch
+    })
 
-        // If tomorrow, show tomorrow
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (matchDate.toDateString() === tomorrow.toDateString()) {
-          return `Tomorrow ${timePart}`;
-        }
-
-        // Otherwise show date and time
-        return `${datePart} ${timePart}`;
-      }
+    if (filteredBetTypes.length > 0) {
+      filteredCategories[categoryName] = filteredBetTypes
     }
-  }
+  })
 
-  return match.scheduled_time;
-};
+  return filteredCategories
+}
 
 // Lifecycle
 onMounted(() => {
-  const authStatus = localStorage.getItem('isAuthenticated');
+  const authStatus = localStorage.getItem('isAuthenticated')
   if (authStatus === 'true') {
-    isAuthenticated.value = true;
-    fetchSports();
+    isAuthenticated.value = true
+    fetchSports()
   }
-});
+})
 </script>
+
+<style scoped>
+/* Add any scoped styles here */
+</style>

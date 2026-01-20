@@ -597,7 +597,7 @@
       // Search filter
       if (filters.search) {
         const searchLower = filters.search.toLowerCase();
-        const match = matches.value.find(m => m.id == matchId);
+        const match = props.matches.find(m => m.id == matchId);
 
         // Search in bet field, line field, and actual team names
         const betMatches = odd.bet.toLowerCase().includes(searchLower);
@@ -746,11 +746,9 @@
   };
 
 
-  // Initialize
+  // Initialize - no longer needed since match fetching is handled by parent component
   onMounted(() => {
-    if (props.selectedLeagues.length > 0) {
-      fetchMatches();
-    }
+    // Component initialization handled by watch on props.matches
   });
   </script>
   
