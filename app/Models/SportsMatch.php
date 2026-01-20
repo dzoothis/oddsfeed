@@ -64,6 +64,6 @@ class SportsMatch extends Model
      */
     public function league()
     {
-        return $this->belongsTo(League::class, 'leagueId', 'id');
+        return $this->belongsTo(League::class, 'leagueId', 'pinnacleId');
     }
 }
