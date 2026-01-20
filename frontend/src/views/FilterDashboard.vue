@@ -245,7 +245,7 @@ import { API_ENDPOINTS } from '../services/api.js'
 import MatchesDisplay from '../components/MatchesDisplay.vue'
 
 // Authentication
-const isAuthenticated = ref(false)
+const isAuthenticated = ref(localStorage.getItem('isAuthenticated') === 'true')
 const password = ref('')
 
 // Data
@@ -470,9 +470,7 @@ const groupBetTypesByCategory = () => {
 
 // Lifecycle
 onMounted(() => {
-  const authStatus = localStorage.getItem('isAuthenticated')
-  if (authStatus === 'true') {
-    isAuthenticated.value = true
+  if (isAuthenticated.value) {
     fetchSports()
   }
 })
