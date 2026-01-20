@@ -5,14 +5,14 @@
           <div>
             <h2 class="text-lg font-semibold text-gray-900">Matches</h2>
             <p class="text-sm text-gray-600 mt-1">
-              {{ loading ? 'Loading matches...' : `${matches.length} matches found` }}
+              {{ props.loading ? 'Loading matches...' : `${props.matches.length} matches found` }}
             </p>
           </div>
         </div>
       </div>
   
       <div class="p-6">
-        <div v-if="loading" class="flex justify-center items-center py-12">
+        <div v-if="props.loading" class="flex justify-center items-center py-12">
           <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
           <span class="ml-3 text-gray-600">Loading matches...</span>
         </div>
@@ -30,15 +30,15 @@
           </div>
         </div>
   
-        <div v-else-if="matches.length === 0" class="text-center py-12">
+        <div v-else-if="props.matches.length === 0" class="text-center py-12">
           <div class="text-gray-400 mb-4 text-4xl">⚽</div>
           <h3 class="text-lg font-medium text-gray-900">No matches found</h3>
-          <p class="text-gray-500 mt-1">No matches available for selected leagues.</p>
+          <p class="text-gray-500 mt-1">No matches available for selected filters.</p>
         </div>
-  
+
         <div v-else class="space-y-4">
           <div
-            v-for="match in matches"
+            v-for="match in props.matches"
             :key="match.id"
             class="match-card bg-white border border-gray-200 rounded-lg overflow-hidden"
           >
@@ -332,7 +332,7 @@
   
   // Props
   const props = defineProps({
-    selectedLeagues: {
+    matches: {
       type: Array,
       default: () => []
     },
@@ -340,15 +340,13 @@
       type: Object,
       default: null
     },
-    selectedMatchType: {
-      type: String,
-      default: 'all'
+    loading: {
+      type: Boolean,
+      default: false
     }
   });
   
   // Reactive data
-  const matches = ref([]);
-  const loading = ref(false);
   const error = ref('');
 
   const expandedMatches = ref([]);
@@ -357,12 +355,7 @@
   const marketFilters = ref({});
   const dropdowns = ref({});
   const loadingMarkets = ref({});
-  const lastLiveUpdate = ref(null);
-  const savedScrollPosition = ref(0);
   
-  // Phase 2: Live polling state
-  let livePollingInterval = null;
-
   // Options
   const availableMarkets = [
     { key: 'money_line', name: 'Money Line' },
@@ -400,137 +393,12 @@
     });
   };
 
-  // Watch for match type changes
-  watch(() => props.selectedMatchType, (newMatchType) => {
-    if (props.selectedLeagues.length > 0) {
-      fetchMatches();
-    }
-  });
-
-  // Watch for league changes (only fetch if we have a match type selected)
-  watch(() => props.selectedLeagues, (newLeagues) => {
-    if (newLeagues.length > 0 && props.selectedMatchType) {
-      fetchMatches();
-      // Phase 2: Start polling for live matches
-      if (props.selectedMatchType === 'live' || props.selectedMatchType === 'all') {
-        startLivePolling();
-      } else {
-        stopLivePolling();
-      }
-    } else {
-      matches.value = [];
-      stopLivePolling();
-    }
-  }, { deep: true });
-
-  // Phase 2: Watch for match type changes to fetch new data and start/stop polling
-  watch(() => props.selectedMatchType, (newMatchType) => {
-    // Fetch new data when match type changes
-    if (props.selectedSport && props.selectedLeagues.length > 0) {
-      fetchMatches();
-    }
-
-    if (newMatchType === 'live' || newMatchType === 'all') {
-      startLivePolling();
-    } else {
-      stopLivePolling();
-    }
-  });
-
   // Watch for matches changes to initialize filters
-  watch(matches, (newMatches) => {
+  watch(() => props.matches, (newMatches) => {
     initializeFiltersForMatches(newMatches);
   }, { immediate: true });
 
-  // Methods
-  const fetchMatches = async () => {
-    if (!props.selectedSport || props.selectedLeagues.length === 0) {
-      matches.value = [];
-      return;
-    }
 
-    loading.value = true;
-    error.value = '';
-
-    try {
-      const leagueIds = props.selectedLeagues.map(league => league.pinnacleId || league.id);
-
-      const response = await http.post(API_ENDPOINTS.MATCHES, {
-        sport_id: props.selectedSport.pinnacleId || props.selectedSport.id,
-        league_ids: leagueIds,
-        match_type: props.selectedMatchType
-      });
-
-      const newMatches = response.data.matches || [];
-
-      // Only update if there are actual changes to prevent unnecessary re-renders
-      const hasChanges = !matches.value ||
-        matches.value.length !== newMatches.length ||
-        !newMatches.every((newMatch, index) =>
-          matches.value[index] &&
-          matches.value[index].id === newMatch.id &&
-          matches.value[index].last_updated === newMatch.last_updated
-        );
-
-      if (hasChanges) {
-        // Save scroll position before updating
-        savedScrollPosition.value = window.scrollY || document.documentElement.scrollTop;
-
-        matches.value = newMatches;
-
-        // Restore scroll position after next tick
-        nextTick(() => {
-          window.scrollTo(0, savedScrollPosition.value);
-        });
-      }
-    } catch (err) {
-      error.value = 'Failed to load matches';
-      console.error('Error fetching matches:', err);
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  // Phase 2: Live polling functions
-  const startLivePolling = () => {
-    stopLivePolling(); // Clear any existing interval
-
-    // Use longer intervals to prevent scroll jumping
-    const pollInterval = props.selectedMatchType === 'live' ? 60000 : 30000; // 60s for live, 30s for all
-
-    livePollingInterval = setInterval(async () => {
-      try {
-        // For live matches, be more conservative with updates
-        if (props.selectedMatchType === 'live') {
-          // Only update if we haven't updated recently
-          const now = Date.now();
-          if (!lastLiveUpdate.value || (now - lastLiveUpdate.value) > 45000) { // 45 seconds
-            await fetchMatches();
-            lastLiveUpdate.value = now;
-          }
-        } else {
-          await fetchMatches();
-        }
-      } catch (error) {
-        console.warn('Live polling failed:', error);
-      }
-    }, pollInterval);
-
-    console.log(`Started live match polling (${pollInterval/1000}s intervals)`);
-  };
-
-  const stopLivePolling = () => {
-    if (livePollingInterval) {
-      clearInterval(livePollingInterval);
-      livePollingInterval = null;
-      console.log('Stopped live match polling');
-    }
-  };
-
-  // Cleanup on component unmount
-  onUnmounted(() => {
-    stopLivePolling();
-  });
   
   const toggleMatchExpansion = async (matchId) => {
     try {

@@ -55,4 +55,12 @@ class SportsMatch extends Model
     {
         return $this->belongsTo(Team::class, 'away_team_id');
     }
+
+    /**
+     * Get the league for this match.
+     */
+    public function league()
+    {
+        return $this->belongsTo(League::class, 'leagueId', 'id');
+    }
 }

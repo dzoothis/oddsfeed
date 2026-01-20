@@ -1,329 +1,267 @@
 <template>
   <div class="min-h-screen bg-gray-50">
-    <!-- Authentication Screen -->
     <div v-if="!isAuthenticated" class="min-h-screen bg-gray-50 flex items-center justify-center">
       <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
-        <div class="text-center mb-6">
-          <h1 class="text-2xl font-bold text-gray-900 mb-2">Sports Feed Dashboard</h1>
-          <p class="text-gray-600">Enter password to access live odds</p>
-        </div>
-
+        <h1 class="text-2xl font-bold text-gray-900 mb-2 text-center">Sports Feed Dashboard</h1>
         <form @submit.prevent="handleLogin" class="space-y-4">
           <div>
-            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
-              Password
-            </label>
-            <input
-              type="password"
-              id="password"
-              v-model="password"
-              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="Enter dashboard password"
-              required
-            />
+            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input type="password" id="password" v-model="password"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="Enter dashboard password"
+              required />
           </div>
-
-          <button type="submit" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-            Access Dashboard
-          </button>
+          <button type="submit" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg">Access Dashboard</button>
         </form>
       </div>
     </div>
 
-    <!-- Main Dashboard -->
-    <div v-else>
+    <div v-else :key="pageTrigger" class="max-w-7xl mx-auto py-8 px-4">
       <!-- Header -->
-      <div class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
-          <div class="px-6 py-6 border-b border-gray-200">
-            <div class="flex items-center justify-between">
-              <div>
-                <h1 class="text-2xl font-bold text-gray-900">Sports Feed</h1>
-                <p class="text-sm text-gray-600 mt-1">Filter by Sport and League to view live odds</p>
-              </div>
-              <div class="flex gap-3">
-                <button
-                  @click="showBetTypesModal = true"
-                  class="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
-                >
-                  All Available Bet Types
-                </button>
-                <button
-                  @click="handleLogout"
-                  class="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
-                >
-                  Logout
-                </button>
-              </div>
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div class="px-6 py-6 border-b border-gray-200">
+          <div class="flex items-center justify-between">
+            <div>
+              <h1 class="text-2xl font-bold text-gray-900">Sports Feed</h1>
+              <p class="text-sm text-gray-600 mt-1">Filter by Sport and League to view live odds</p>
             </div>
-          </div>
-        </div>
-
-        <!-- Filter Section -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
-          <div class="px-6 py-6 bg-gray-50">
-            
-            <!-- Sport Selection -->
-            <div class="mb-6">
-              <label class="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                Select Sport
-              </label>
-              <div class="flex flex-wrap gap-3">
-                <button
-                  v-for="sport in sports"
-                  :key="sport.id"
-                  @click="selectSport(sport)"
-                  class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-                  :class="selectedSport?.id === sport.id ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
-                >
-                  {{ sport.name }}
-                </button>
-              </div>
-            </div>
-
-            <!-- League Filter - Search + Multi-select -->
-            <div class="relative">
-              <label class="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                League <span class="text-gray-500">(Required for filtering)</span>
-              </label>
-              <input
-                type="text"
-                v-model="leagueSearch"
-                @input="handleLeagueSearch"
-                @focus="handleLeagueFocus"
-                @blur="handleLeagueBlur"
-                class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm placeholder-gray-400"
-                placeholder="Search and add leagues"
-                :disabled="!selectedSport"
-              />
-
-              <!-- League Dropdown -->
-              <div v-if="showLeagueDropdown && filteredLeagues.length > 0"
-                   class="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-64 overflow-y-auto">
-                <div v-for="league in filteredLeagues"
-                     :key="league.id"
-                     @mousedown="selectLeague(league)"
-                     class="px-4 py-2 hover:bg-gray-100 cursor-pointer"
-                     :class="isLeagueSelected(league) ? 'bg-blue-50' : 'bg-white'">
-                  <span class="text-sm">{{ league.name }}</span>
-                  <span v-if="league.container" class="text-xs text-gray-500 ml-2">({{ league.container }})</span>
-                </div>
-              </div>
-
-              <!-- No Results Message -->
-              <div v-else-if="showLeagueDropdown && leagueSearch && filteredLeagues.length === 0"
-                   class="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-4">
-                <p class="text-sm text-gray-500">No leagues match "{{ leagueSearch }}"</p>
-              </div>
-
-              <!-- Loading State -->
-              <div v-else-if="showLeagueDropdown && loadingLeagues"
-                   class="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg p-4">
-                <p class="text-sm text-gray-500">Loading leagues...</p>
-              </div>
-
-              <!-- Selected Leagues Tags -->
-              <div class="mt-2 flex flex-wrap gap-2">
-                <span v-for="league in selectedLeagues"
-                      :key="league.id"
-                      class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                  {{ league.name }}
-                  <button @click="removeLeague(league)"
-                          class="ml-2 text-blue-600 hover:text-blue-800">
-                    ×
-                  </button>
-                </span>
-              </div>
-            </div>
-
-            <!-- Match Type Filter -->
-            <div v-if="showFilters" class="mt-6">
-              <label class="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                Match Type
-              </label>
-              <div class="flex flex-wrap gap-3">
-                <button
-                  v-for="matchType in matchTypeOptions"
-                  :key="matchType.key"
-                  @click="selectMatchType(matchType.key)"
-                  class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-                  :class="selectedMatchType === matchType.key
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
-                >
-                  {{ matchType.name }}
-                </button>
-              </div>
-              <p class="text-xs text-gray-500 mt-2">
-                Filter matches: All matches, Live (in-play), or Prematch (upcoming)
-              </p>
-            </div>
-
-          </div>
-        </div>
-
-        <!-- Matches Display -->
-        <MatchesDisplay
-          v-if="showFilters"
-          :selected-leagues="selectedLeagues"
-          :selected-sport="selectedSport"
-          :selected-match-type="selectedMatchType"
-        />
-
-
-        <!-- Bet Types Modal -->
-        <div v-if="showBetTypesModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" @click="closeBetTypesModal">
-          <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] mx-4 flex flex-col" @click.stop>
-            <!-- Modal Header -->
-            <div class="flex items-center justify-between p-6 border-b border-gray-200">
-              <h2 class="text-xl font-semibold text-gray-900">All Available Bet Types</h2>
-              <button
-                @click="closeBetTypesModal"
-                class="text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none"
-              >
-                ×
+            <div class="flex gap-3">
+              <button @click="openBetTypesModal"
+                class="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors">
+                All Available Bet Types
               </button>
-            </div>
-
-            <!-- Modal Content -->
-            <div class="flex-1 overflow-hidden" style="max-height: calc(90vh - 120px);">
-              <!-- Side by Side Layout -->
-              <div class="flex flex-col md:flex-row h-full">
-                <!-- Left Side: Sports List -->
-                <div class="w-full md:w-1/3 border-b md:border-b-0 md:border-r border-gray-200 bg-gray-50 overflow-y-auto" style="max-height: calc(90vh - 140px);">
-                  <div class="p-6">
-                    <h3 class="text-lg font-medium text-gray-900 mb-4">Select Sport</h3>
-                    <div class="space-y-2">
-                      <button
-                        v-for="sport in betTypesSports"
-                        :key="sport.id"
-                        @click="selectSportForBetTypes(sport.id)"
-                        class="w-full text-left px-4 py-3 rounded-lg border transition-colors"
-                        :class="betTypesSelectedSport === sport.id
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'"
-                      >
-                        <div class="font-medium">{{ sport.name }}</div>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Right Side: Bet Types -->
-                <div class="flex-1 overflow-hidden">
-                  <div class="h-full overflow-y-auto p-6" style="max-height: calc(90vh - 140px);">
-                    <!-- Loading State -->
-                    <div v-if="betTypesLoading" class="flex justify-center items-center py-12">
-                      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-                      <span class="ml-3 text-gray-600">Loading bet types...</span>
-                    </div>
-
-                    <!-- Error State -->
-                    <div v-else-if="betTypesError" class="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
-                      <div class="flex">
-                        <div class="flex-shrink-0">
-                          <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                          </svg>
-                        </div>
-                        <div class="ml-3">
-                          <p class="text-sm text-red-800">{{ betTypesError }}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- No Sport Selected Message -->
-                    <div v-else-if="!betTypesSelectedSport" class="text-center py-12">
-                      <div class="text-gray-400 mb-4 text-4xl">🎯</div>
-                      <h3 class="text-lg font-medium text-gray-900">Select a Sport</h3>
-                      <p class="text-gray-500 mt-1">Choose a sport from the left panel to view available bet types.</p>
-                    </div>
-
-                    <!-- Bet Types Display -->
-                    <div v-else-if="Object.keys(betTypesResponse.categories || {}).length > 0">
-                      <div class="mb-6">
-                        <h3 class="text-lg font-medium text-gray-900">
-                          Bet Types for {{ getSelectedSportName() }}
-                        </h3>
-                      </div>
-
-                      <!-- Search Bar -->
-                      <div class="mb-6">
-                        <div class="relative">
-                          <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                            </svg>
-                          </div>
-                          <input
-                            type="text"
-                            v-model="betTypesSearch"
-                            placeholder="Search bet types..."
-                            class="block w-full pl-10 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm placeholder-gray-400"
-                          />
-                        </div>
-                      </div>
-
-                      <!-- Bet Types List Grouped by Category -->
-                      <div class="space-y-6">
-                        <div
-                          v-for="(categoryGroup, categoryName) in groupBetTypesByCategory()"
-                          :key="categoryName"
-                          class="mb-6"
-                        >
-                          <div class="space-y-3">
-                            <div
-                              v-for="betType in categoryGroup"
-                              :key="betType.id || betType.type"
-                              class="bg-white rounded-lg p-4 border border-gray-200"
-                            >
-                              <div class="flex items-center justify-between">
-                                <div class="flex-1">
-                                  <h5 class="font-medium text-gray-900">{{ betType.name }}</h5>
-                                  <p class="text-sm text-gray-600 mt-1">{{ betType.description }}</p>
-                                </div>
-                                <div class="flex items-center ml-4">
-                                  <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                    ✓ Available
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                    </div>
-
-                    <!-- No Bet Types Message -->
-                    <div v-else class="text-center py-12">
-                      <div class="text-gray-400 mb-4 text-4xl">🎲</div>
-                      <h3 class="text-lg font-medium text-gray-900">No bet types available</h3>
-                      <p class="text-gray-500 mt-1">No betting markets are currently available for this sport.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Modal Footer -->
-            <div class="p-6 border-t border-gray-200 flex justify-end">
-              <button
-                @click="closeBetTypesModal"
-                class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-              >
-                Close
+              <button @click="handleLogout"
+                class="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors">
+                Logout
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 p-6">
+        <label class="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Select Sport</label>
+
+        <!-- Loading state for sports -->
+        <div v-if="sports.length === 0" class="text-center py-8">
+          <div class="text-gray-400 mb-4 text-4xl">⏳</div>
+          <p class="text-gray-500">Loading sports...</p>
+        </div>
+
+        <!-- Sports selection -->
+        <div v-else class="flex flex-wrap gap-3">
+          <button v-for="sport in sports" :key="sport.id" @click="selectSport(sport)"
+            class="px-4 py-2 text-sm font-medium rounded-lg"
+            :class="selectedSport?.id === sport.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'">
+            {{ sport.name }}
+          </button>
+        </div>
+
+        <div v-if="selectedSport" class="mt-6 p-4 border-2 border-green-500 bg-green-50">
+          <button @click="loadAllMatchesForSport" :disabled="loadingMatches"
+            class="w-full px-6 py-3 bg-green-600 text-white rounded-lg">
+            <span v-if="loadingMatches">Loading Matches...</span>
+            <span v-else>Get Matches for {{ selectedSport.name }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="allMatchesLoaded" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-gray-900">Matches ({{ filteredMatches.length }})</h3>
+          <!-- Match Type Filters -->
+          <div class="flex items-center gap-2">
+            <button @click="setMatchTypeFilter('live')"
+              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
+                matchTypeFilter === 'live' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
+              Live ({{ liveMatchesCount }})
+            </button>
+            <button @click="setMatchTypeFilter('prematch')"
+              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
+                matchTypeFilter === 'prematch' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
+              Pre-match ({{ upcomingMatchesCount }})
+            </button>
+            <button @click="setMatchTypeFilter('all')"
+              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
+                matchTypeFilter === 'all' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
+              All ({{ allMatches.length }})
+            </button>
+          </div>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="mb-4">
+          <div class="relative">
+            <input v-model="matchSearchTerm" type="text" placeholder="Search teams and leagues..."
+              class="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" />
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <button v-if="matchSearchTerm" @click="matchSearchTerm = ''"
+              class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          <div v-for="match in filteredMatches" :key="match.id" :class="['border rounded-lg p-4',
+            match.match_type === 'live' ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white']">
+            <div class="flex justify-between items-center">
+              <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <div class="font-semibold">{{ match.home_team }} vs {{ match.away_team }}</div>
+                  <span
+                    :class="['inline-flex items-center px-2 py-1 text-xs font-medium rounded-full',
+                      match.match_type === 'live' ? 'bg-red-100 text-red-800 animate-pulse' : 'bg-blue-100 text-blue-800']">
+                    {{ match.match_type === 'live' ? '🔴 LIVE' : '⏰ PREMATCH' }}
+                  </span>
+                </div>
+                <div class="text-sm text-gray-600">League: {{ match.league_name }}</div>
+              </div>
+              <div class="text-sm text-gray-500 text-right">
+                <div>{{ formatMatchTime(match) }}</div>
+                <div v-if="match.match_type === 'live'" class="text-red-600 font-medium animate-pulse">LIVE NOW</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bet Types Modal -->
+      <div v-if="showBetTypesModal" :key="modalTrigger"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click="closeBetTypesModal">
+        <div class="bg-white w-full max-w-5xl h-[85vh] rounded-lg shadow-sm border border-gray-200 flex flex-col"
+          @click.stop>
+
+          <!-- Header -->
+          <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-gray-900">All Available Bet Types</h2>
+              <p class="text-sm text-gray-600 mt-1">
+                Browse betting markets by sport
+              </p>
+            </div>
+            <button @click="closeBetTypesModal"
+              class="px-3 py-1 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">
+              Close
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="flex flex-1 overflow-hidden">
+
+            <!-- Left Panel: Sports -->
+            <aside class="w-64 border-r border-gray-200 bg-gray-50 flex flex-col">
+              <div class="px-4 py-3 border-b border-gray-200">
+                <h3 class="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Sports
+                </h3>
+              </div>
+
+              <div class="flex-1 overflow-y-auto p-3 space-y-2">
+                <div v-if="betTypesSports.length === 0" class="text-center py-6 text-gray-500 text-sm">
+                  Loading sports...
+                </div>
+
+                <button v-else v-for="sport in betTypesSports" :key="sport.id" @click="selectBetTypesSport(sport)"
+                  class="w-full px-3 py-2 text-sm font-medium rounded-lg text-left border transition-colors" :class="betTypesSelectedSport?.id === sport.id
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'">
+                  {{ sport.name }}
+                </button>
+              </div>
+            </aside>
+
+            <!-- Right Panel -->
+            <section class="flex-1 flex flex-col overflow-hidden">
+
+              <!-- Search -->
+              <div class="px-6 py-4 border-b border-gray-200 bg-white">
+                <div class="flex items-center gap-4">
+                  <div class="relative w-full max-w-sm">
+                    <input v-model="betTypesSearch" type="text" placeholder="Search bet types..."
+                      class="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <svg class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <button v-if="betTypesSearch" @click="betTypesSearch = ''"
+                      class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Content -->
+              <div class="flex-1 overflow-y-auto p-6 bg-gray-50">
+
+                <!-- Empty States -->
+                <div v-if="!betTypesSelectedSport"
+                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                  Select a sport to view bet types
+                </div>
+
+                <div v-else-if="!betTypesResponse"
+                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                  Loading bet types...
+                </div>
+
+                <div v-else-if="Object.keys(filteredBetTypesCategories).length === 0"
+                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                  No bet types found
+                </div>
+
+                <!-- Categories -->
+                <div v-else class="space-y-6">
+                  <div v-for="(betTypes, category) in filteredBetTypesCategories" :key="category"
+                    class="bg-white border border-gray-200 rounded-lg">
+                    <div class="px-5 py-3 border-b border-gray-200">
+                      <h4 class="text-sm font-semibold text-gray-900">
+                        {{ category }}
+                      </h4>
+                    </div>
+
+                    <div class="p-4 space-y-3">
+                      <div v-for="betType in betTypes" :key="betType.id"
+                        class="flex justify-between gap-4 p-3 border border-gray-200 rounded-lg bg-white hover:bg-gray-50">
+                        <div>
+                          <div class="text-sm font-medium text-gray-900">
+                            {{ betType.name }}
+                          </div>
+                          <div v-if="betType.description" class="text-xs text-gray-600 mt-1">
+                            {{ betType.description }}
+                          </div>
+                        </div>
+
+                        <span class="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-800 h-fit">
+                          Available
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed, watch, nextTick } from 'vue';
 import http from '../services/http.js';
 import { API_ENDPOINTS, API_PARAMS } from '../services/api.js';
 import MatchesDisplay from '../components/MatchesDisplay.vue';
@@ -353,73 +291,115 @@ const matchTypeOptions = [
   { key: 'prematch', name: 'Prematch Matches' }
 ];
 
+// Match loading and filtering state
+const allMatchesLoaded = ref(false);
+const loadingMatches = ref(false);
+const allMatches = ref([]);
+const matchTypeFilter = ref('all');
+const matchSearchTerm = ref('');
+const pageTrigger = ref(0); // Force re-render trigger for main page
+
 // Modal state
 const showBetTypesModal = ref(false);
-
-// Bet Types Modal state
-const betTypesSelectedSport = ref('');
-const betTypesResponse = ref({ categories: {}, flat: [] });
-const betTypesLoading = ref(false);
-const betTypesError = ref('');
+const betTypesResponse = ref(null);
+const betTypesSelectedSport = ref(null);
 const betTypesSearch = ref('');
+const modalTrigger = ref(0); // Force re-render trigger
 
-// API Configuration - using centralized HTTP service
+const filteredMatches = computed(() => {
+  let matches = [...leagueFilteredMatches.value];
 
-const DASHBOARD_PASSWORD = 'sportsfeed2025';
-
-// Computed properties
-const hasSelections = computed(() => {
-  return selectedSport.value && selectedLeagues.value.length > 0;
-});
-
-const showFilters = computed(() => {
-  return hasSelections.value;
-});
-
-const groupBetTypesByCategory = () => {
-  // Use the categories directly from the API response
-  const categories = betTypesResponse.value.categories || {};
-  const searchTerm = betTypesSearch.value.toLowerCase().trim();
-
-  if (!searchTerm) {
-    // Show all categories if no search term
-    return categories;
+  // Filter by match type
+  if (matchTypeFilter.value !== 'all') {
+    matches = matches.filter(match => match.match_type === matchTypeFilter.value);
   }
 
-  // Filter categories and bet types based on search term
-  const filteredCategories = {};
+  // Filter by search term
+  if (matchSearchTerm.value.trim()) {
+    const searchTerm = matchSearchTerm.value.toLowerCase().trim();
+    matches = matches.filter(match => {
+      const homeTeam = match.home_team?.toLowerCase() || '';
+      const awayTeam = match.away_team?.toLowerCase() || '';
+      const leagueName = match.league_name?.toLowerCase() || '';
 
-  Object.keys(categories).forEach(categoryName => {
-    const categoryBetTypes = categories[categoryName];
+      return homeTeam.includes(searchTerm) ||
+        awayTeam.includes(searchTerm) ||
+        leagueName.includes(searchTerm);
+    });
+  }
 
-    // Check if category name matches search
-    const categoryMatches = categoryName.toLowerCase().includes(searchTerm);
+  // Sort matches: Live matches first, then pre-match matches by time (earliest first)
+  matches.sort((a, b) => {
+    // Live matches always come first
+    if (a.match_type === 'live' && b.match_type !== 'live') return -1;
+    if (b.match_type === 'live' && a.match_type !== 'live') return 1;
 
-    // Filter bet types within this category
-    const filteredBetTypes = categoryBetTypes.filter(betType => {
-      const nameMatches = betType.name.toLowerCase().includes(searchTerm);
-      const descriptionMatches = betType.description.toLowerCase().includes(searchTerm);
-      return nameMatches || descriptionMatches;
+    // If both are live or both are pre-match, sort by time
+    const aTime = new Date(a.scheduled_time).getTime();
+    const bTime = new Date(b.scheduled_time).getTime();
+
+    // Handle invalid dates
+    if (isNaN(aTime) && isNaN(bTime)) return 0;
+    if (isNaN(aTime)) return 1;
+    if (isNaN(bTime)) return -1;
+
+    return aTime - bTime; // Earliest first
+  });
+
+  return matches;
+});
+
+const leagueFilteredMatches = computed(() => {
+  let matches = allMatches.value;
+
+  // Apply league filtering only
+  if (selectedLeagues.value.length > 0) {
+    const selectedLeagueIds = selectedLeagues.value.map(league => league.id);
+    matches = matches.filter(match => selectedLeagueIds.includes(match.league_id));
+  }
+
+  return matches;
+});
+
+const liveMatchesCount = computed(() => {
+  return leagueFilteredMatches.value.filter(match => match.match_type === 'live').length;
+});
+
+const upcomingMatchesCount = computed(() => {
+  return leagueFilteredMatches.value.filter(match => match.match_type === 'prematch').length;
+});
+
+const filteredBetTypesCategories = computed(() => {
+  if (!betTypesSelectedSport.value || !betTypesResponse.value) {
+    return {};
+  }
+
+  const categories = {};
+  const responseCategories = betTypesResponse.value.categories || {};
+
+  // Get bet types for the selected sport
+  Object.entries(responseCategories).forEach(([category, betTypes]) => {
+    const filteredBetTypes = betTypes.filter(betType => {
+      if (!betTypesSearch.value.trim()) return true;
+
+      const searchTerm = betTypesSearch.value.toLowerCase().trim();
+      const name = betType.name?.toLowerCase() || '';
+      const description = betType.description?.toLowerCase() || '';
+
+      return name.includes(searchTerm) || description.includes(searchTerm);
     });
 
-    // Include category if category name matches OR if it has any matching bet types
-    if (categoryMatches || filteredBetTypes.length > 0) {
-      filteredCategories[categoryName] = filteredBetTypes;
+    if (filteredBetTypes.length > 0) {
+      categories[category] = filteredBetTypes;
     }
   });
 
-  return filteredCategories;
-};
-
-
-// Watch for league changes to trigger matches loading
-watch(() => selectedLeagues.value, (newLeagues) => {
-  // The MatchesDisplay component will handle this automatically
-}, { deep: true });
+  return categories;
+});
 
 // Authentication
 const handleLogin = async () => {
-  if (password.value === DASHBOARD_PASSWORD) {
+  if (password.value === 'sportsfeed2025') {
     isAuthenticated.value = true;
     localStorage.setItem('isAuthenticated', 'true');
     await fetchSports();
@@ -435,7 +415,9 @@ const handleLogout = () => {
   selectedSport.value = null;
   leagues.value = [];
   selectedLeagues.value = [];
-  resetBetTypesState();
+  allMatchesLoaded.value = false;
+  allMatches.value = [];
+  activeMatchTypeFilter.value = 'all';
 };
 
 // League filtering methods
@@ -453,7 +435,6 @@ const handleLeagueFocus = () => {
 };
 
 const handleLeagueBlur = () => {
-  // Delay hiding dropdown to allow for clicks
   setTimeout(() => {
     showLeagueDropdown.value = false;
   }, 200);
@@ -465,7 +446,6 @@ const loadLeaguesForSport = async () => {
   loadingLeagues.value = true;
 
   try {
-    // If user has typed something, use search, otherwise load popular leagues
     if (leagueSearch.value.trim()) {
       const response = await http.get(API_ENDPOINTS.REFERENCE.LEAGUES_SEARCH, {
         params: {
@@ -476,7 +456,6 @@ const loadLeaguesForSport = async () => {
       });
       leagues.value = response.data.leagues || [];
     } else {
-      // Load popular leagues when no search term
       await fetchLeagues();
     }
     await filterLeagues();
@@ -490,15 +469,14 @@ const loadLeaguesForSport = async () => {
 
 const filterLeagues = async () => {
   if (!leagueSearch.value) {
-    filteredLeagues.value = leagues.value.slice(0, 10); // Show first 10
+    filteredLeagues.value = leagues.value.slice(0, 10);
     return;
   }
 
-  // Filter and score leagues based on search
   filteredLeagues.value = leagues.value
     .filter(league => matchesLeagueSearch(league, leagueSearch.value))
     .sort((a, b) => calculateSearchScore(b, leagueSearch.value) - calculateSearchScore(a, leagueSearch.value))
-    .slice(0, 20); // Limit results
+    .slice(0, 20);
 };
 
 const matchesLeagueSearch = (league, search) => {
@@ -507,19 +485,11 @@ const matchesLeagueSearch = (league, search) => {
   const name = league.name.toLowerCase();
   const query = search.toLowerCase();
 
-  // Exact match
   if (name === query) return true;
-
-  // Starts with query
   if (name.startsWith(query)) return true;
-
-  // Contains query as whole word
   if (name.includes(' ' + query) || name.includes(query + ' ')) return true;
-
-  // Contains query anywhere
   if (name.includes(query)) return true;
 
-  // Word starts with query
   const nameWords = name.split(' ');
   return nameWords.some(word => word.startsWith(query));
 };
@@ -528,19 +498,11 @@ const calculateSearchScore = (league, search) => {
   const name = league.name.toLowerCase();
   const query = search.toLowerCase();
 
-  // Exact match
   if (name === query) return 100;
-
-  // Starts with query
   if (name.startsWith(query)) return 80;
-
-  // Contains as whole word
   if (name.includes(' ' + query + ' ')) return 60;
-
-  // Contains anywhere
   if (name.includes(query)) return 40;
 
-  // Word starts with query
   const nameWords = name.split(' ');
   if (nameWords.some(word => word.startsWith(query))) return 20;
 
@@ -576,24 +538,44 @@ const selectMatchType = (matchType) => {
 const fetchSports = async () => {
   try {
     const response = await http.get(API_ENDPOINTS.SPORTS);
-    sports.value = response.data.data;
 
-    // Also fetch bet types sports
-    const betTypesResponse = await http.get(API_ENDPOINTS.BET_TYPES.SPORTS);
-    betTypesSports.value = betTypesResponse.data || [];
+    if (response.data.data && Array.isArray(response.data.data)) {
+      sports.value = response.data.data;
+    } else if (response.data && Array.isArray(response.data)) {
+      sports.value = response.data;
+    } else if (response.data && Array.isArray(response.data.sports)) {
+      sports.value = response.data.sports;
+    } else {
+      sports.value = [];
+    }
+
+    try {
+      const betTypesResponse = await http.get(API_ENDPOINTS.BET_TYPES.SPORTS);
+      betTypesSports.value = betTypesResponse.data || [];
+    } catch (error) {
+      console.error('Error loading bet types sports:', error);
+      betTypesSports.value = [];
+    }
   } catch (error) {
     console.error('Error fetching sports:', error);
+    sports.value = [];
   }
 };
 
-const selectSport = (sport) => {
-  selectedSport.value = sport;
+const selectSport = async (sport) => {
+  selectedSport.value = { ...sport }; // Force reactivity
+  pageTrigger.value++; // Force re-render
 
-  // Clear league selections when sport changes
   selectedLeagues.value = [];
   leagueSearch.value = '';
   leagues.value = [];
 
+  allMatchesLoaded.value = false;
+  allMatches.value = [];
+  matchTypeFilter.value = 'all';
+  matchSearchTerm.value = '';
+
+  await nextTick(); // Wait for DOM update
   fetchLeagues();
 };
 
@@ -602,12 +584,10 @@ const fetchLeagues = async () => {
 
   loadingLeagues.value = true;
   try {
-    // Use search endpoint to get popular leagues first (NBA, NHL, MLB, etc.)
     const popularSearches = ['NBA', 'NHL', 'MLB', 'NFL', 'WNBA', 'NCAAB', 'NCAAF'];
 
     let allLeagues = [];
 
-    // First, fetch popular leagues using search
     for (const searchTerm of popularSearches) {
       try {
         const response = await http.get(API_ENDPOINTS.REFERENCE.LEAGUES_SEARCH, {
@@ -626,13 +606,11 @@ const fetchLeagues = async () => {
       }
     }
 
-    // Remove duplicates based on ID
     const uniqueLeagues = allLeagues.filter((league, index, self) =>
       index === self.findIndex(l => l.id === league.id)
     );
 
     leagues.value = uniqueLeagues;
-    console.log(`Loaded ${uniqueLeagues.length} popular leagues for sport ${selectedSport.value.id}`);
   } catch (error) {
     console.error('Error fetching leagues:', error);
     leagues.value = [];
@@ -641,86 +619,126 @@ const fetchLeagues = async () => {
   }
 };
 
-// Bet Types Modal functions
-const closeBetTypesModal = () => {
-  showBetTypesModal.value = false;
-  resetBetTypesState();
-};
+const loadAllMatchesForSport = async () => {
+  if (!selectedSport.value) return;
 
-const resetBetTypesState = () => {
-  betTypesSelectedSport.value = '';
-  betTypesResponse.value = { categories: {}, flat: [] };
-  betTypesLoading.value = false;
-  betTypesError.value = '';
-  betTypesSearch.value = '';
-};
-
-const selectSportForBetTypes = async (sportId) => {
-  betTypesSelectedSport.value = sportId;
-  betTypesLoading.value = true;
-  betTypesError.value = '';
-  betTypesSearch.value = ''; // Clear search when selecting new sport
+  loadingMatches.value = true;
 
   try {
-    const response = await http.get(API_ENDPOINTS.REFERENCE.BET_TYPES, {
-      params: {
-        sportId: sportId
-      }
+    const response = await http.post(API_ENDPOINTS.MATCHES, {
+      sport_id: selectedSport.value.pinnacleId || selectedSport.value.id,
     });
 
-    // Store the structured response
-    betTypesResponse.value = response.data || { categories: {}, flat: [] };
-    console.log('Bet types loaded for sport:', sportId, 'categories:', Object.keys(betTypesResponse.value.categories || {}).length);
+    allMatches.value = response.data.matches || [];
+    allMatchesLoaded.value = true;
+
+    console.log(`Loaded ${allMatches.value.length} matches for sport ${selectedSport.value.name}`);
   } catch (error) {
-    betTypesError.value = 'Failed to load bet types';
-    console.error('Error loading bet types for sport:', error);
+    console.error('Error loading matches:', error);
+    allMatches.value = [];
   } finally {
-    betTypesLoading.value = false;
+    loadingMatches.value = false;
   }
 };
 
-const getSelectedSportName = () => {
-  const sport = betTypesSports.value.find(s => s.id == betTypesSelectedSport.value);
-  return sport ? sport.name : 'Selected Sport';
+const setMatchTypeFilter = (matchType) => {
+  matchTypeFilter.value = matchType;
 };
 
-const formatMatchTime = (dateString) => {
-  if (!dateString) return 'TBD';
+const clearFilters = () => {
+  selectedLeagues.value = [];
+  matchTypeFilter.value = 'all';
+  leagueSearch.value = '';
+  matchSearchTerm.value = '';
+};
 
-  const date = new Date(dateString);
-  const now = new Date();
-  const diff = date - now;
-  const hours = Math.floor(Math.abs(diff) / (1000 * 60 * 60));
-  const minutes = Math.floor((Math.abs(diff) % (1000 * 60 * 60)) / (1000 * 60));
+const openBetTypesModal = () => {
+  showBetTypesModal.value = true;
+  betTypesSearch.value = '';
+  betTypesResponse.value = null;
+  modalTrigger.value = 0; // Reset trigger
 
-  if (diff > 0) {
-    // Future match
-    if (hours < 24) {
-      return `In ${hours}h ${minutes}m`;
-    } else {
-      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // Pre-select the currently selected sport if any
+  if (selectedSport.value) {
+    betTypesSelectedSport.value = selectedSport.value;
+    // Load bet types for the pre-selected sport
+    selectBetTypesSport(selectedSport.value);
+  }
+};
+
+const closeBetTypesModal = () => {
+  showBetTypesModal.value = false;
+  betTypesSelectedSport.value = null;
+  betTypesSearch.value = '';
+  betTypesResponse.value = null;
+  modalTrigger.value = 0;
+};
+
+const selectBetTypesSport = async (sport) => {
+  betTypesSelectedSport.value = { ...sport };
+  modalTrigger.value++; // Force re-render
+
+  await nextTick(); // Force DOM update
+
+  betTypesResponse.value = null; // Reset while loading
+
+  try {
+    const sportId = sport.pinnacleId || sport.id;
+    const response = await http.get(API_ENDPOINTS.REFERENCE.BET_TYPES, {
+      params: { sportId: sportId }
+    });
+    betTypesResponse.value = { ...response.data };
+    modalTrigger.value++; // Force final re-render
+
+    await nextTick();
+  } catch (error) {
+    console.error('Error fetching bet types:', error);
+    betTypesResponse.value = {}; // Set to empty object to indicate we tried
+    modalTrigger.value++; // Force re-render on error
+    await nextTick();
+  }
+};
+
+const formatMatchTime = (match) => {
+  if (match.match_type === 'live') {
+    return 'Live Now';
+  }
+
+  if (!match.scheduled_time || match.scheduled_time === 'TBD') {
+    return 'TBD';
+  }
+
+  // Handle the format "01/16/2026, 03:10:00"
+  if (match.scheduled_time.includes(',')) {
+    const parts = match.scheduled_time.split(', ');
+    if (parts.length === 2) {
+      const datePart = parts[0];
+      const timePart = parts[1];
+
+      const date = new Date(datePart + ' ' + timePart);
+      if (!isNaN(date.getTime())) {
+        const now = new Date();
+        const matchDate = new Date(date);
+
+        // If same day, just show time
+        if (matchDate.toDateString() === now.toDateString()) {
+          return `Today ${timePart}`;
+        }
+
+        // If tomorrow, show tomorrow
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        if (matchDate.toDateString() === tomorrow.toDateString()) {
+          return `Tomorrow ${timePart}`;
+        }
+
+        // Otherwise show date and time
+        return `${datePart} ${timePart}`;
+      }
     }
-  } else {
-    // Past or current match
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
-};
 
-const formatMarketType = (type) => {
-  const typeMap = {
-    'money_line': 'Money Line',
-    'spreads': 'Spreads',
-    'totals': 'Totals',
-    'team_totals': 'Team Totals',
-    'player_props': 'Player Props',
-    'team_props': 'Team Props',
-    'corners': 'Corners',
-    'draw_no_bet': 'Draw No Bet',
-    'both_teams_to_score': 'Both Teams To Score',
-    'correct_score': 'Correct Score'
-  };
-
-  return typeMap[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  return match.scheduled_time;
 };
 
 // Lifecycle

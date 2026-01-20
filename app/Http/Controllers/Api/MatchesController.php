@@ -2,10 +2,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\League;
 use App\Models\SportsMatch;
 use App\Services\PinnacleService;
 use App\Services\TeamResolutionService;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -39,9 +41,7 @@ class MatchesController extends Controller
                 return response()->json(['error' => 'sport_id is required'], 400);
             }
 
-            if (empty($leagueIds)) {
-                return response()->json(['error' => 'league_ids array is required'], 400);
-            }
+            // league_ids is now optional - if empty, return all matches for the sport
 
             Log::info('Serving matches with database-first strategy', [
                 'sportId' => $sportId,
@@ -224,13 +224,17 @@ class MatchesController extends Controller
     private function getMatchesFromDatabase($sportId, $leagueIds, $matchType)
     {
         try {
-            // Convert Pinnacle IDs to database IDs if needed
-            $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
-
-            $query = SportsMatch::where('sportId', $sportId)
-                ->whereIn('leagueId', $databaseLeagueIds)
+            $query = SportsMatch::with('league') // Eager load league relationship
+                ->where('sportId', $sportId)
                 ->where('lastUpdated', '>', now()->subHours(24)) // Only recent matches
                 ->orderBy('startTime', 'asc');
+
+            // Only filter by leagues if leagueIds is provided and not empty
+            if (!empty($leagueIds)) {
+                // Convert Pinnacle IDs to database IDs if needed
+                $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
+                $query->whereIn('leagueId', $databaseLeagueIds);
+            }
 
             // Filter by match type
             if ($matchType === 'live') {
@@ -321,7 +325,7 @@ class MatchesController extends Controller
                 'home_team_id' => $match->home_team_id,
                 'away_team_id' => $match->away_team_id,
                 'league_id' => $match->leagueId,
-                'league_name' => $match->league ? $match->league->name : 'Unknown',
+                'league_name' => $match->league ? $match->league->name : 'League ' . $match->leagueId,
                 'scheduled_time' => $match->startTime ? $match->startTime->format('m/d/Y, H:i:s') : 'TBD',
                 'match_type' => $match->match_type ?? $match->eventType,
                 'live_status_id' => $match->live_status_id ?? 0,
@@ -367,7 +371,7 @@ class MatchesController extends Controller
             }
 
             // Check for recent failed jobs
-            $recentFailures = \DB::table('failed_jobs')
+            $recentFailures = DB::table('failed_jobs')
                 ->where('failed_at', '>', now()->subHours(1))
                 ->count();
 
@@ -378,11 +382,11 @@ class MatchesController extends Controller
             }
 
             // Check data freshness
-            $staleMatches = \DB::table('matches')
+            $staleMatches = DB::table('matches')
                 ->where('lastUpdated', '<', now()->subHours(6))
                 ->count();
 
-            $totalMatches = \DB::table('matches')->count();
+            $totalMatches = DB::table('matches')->count();
 
             if ($totalMatches > 0 && ($staleMatches / $totalMatches) > 0.8) {
                 $healthStatus['warnings'][] = 'Most match data is stale';
@@ -445,6 +449,11 @@ class MatchesController extends Controller
 
     private function getLiveMatchesFromCache($sportId, $leagueIds)
     {
+        // If no specific leagues requested, return empty array (rely on database)
+        if (empty($leagueIds)) {
+            return [];
+        }
+
         $allLiveMatches = [];
 
         foreach ($leagueIds as $leagueId) {
@@ -510,6 +519,11 @@ class MatchesController extends Controller
 
     private function getPrematchMatchesFromCache($sportId, $leagueIds)
     {
+        // If no specific leagues requested, return empty array (rely on database)
+        if (empty($leagueIds)) {
+            return [];
+        }
+
         $allPrematchMatches = [];
 
         foreach ($leagueIds as $leagueId) {
@@ -579,6 +593,22 @@ class MatchesController extends Controller
 
     private function triggerBackgroundSync($sportId, $leagueIds, $matchType)
     {
+        // If no specific leagues provided, trigger sync for all leagues of the sport
+        if (empty($leagueIds)) {
+            // Get all league IDs for this sport from database
+            $allLeagueIds = DB::table('leagues')
+                ->where('sportId', $sportId)
+                ->pluck('pinnacleId')
+                ->toArray();
+
+            $leagueIds = $allLeagueIds;
+
+            Log::info('Triggering background sync for all leagues of sport', [
+                'sportId' => $sportId,
+                'leagueIds' => $leagueIds
+            ]);
+        }
+
         // Trigger appropriate background jobs based on match type
         // Route jobs to appropriate queues for proper processing
         if ($matchType === 'all' || $matchType === 'live') {
@@ -979,7 +1009,7 @@ class MatchesController extends Controller
             $match = SportsMatch::where('eventId', $matchId)->first();
 
             if (!$match) {
-                \Log::warning('Match not found in getMatchDetails', ['matchId' => $matchId]);
+                Log::warning('Match not found in getMatchDetails', ['matchId' => $matchId]);
                 return response()->json(['error' => 'Match not found'], 404);
             }
 
@@ -1006,7 +1036,7 @@ class MatchesController extends Controller
                     ] : null,
                 ];
             } else {
-                \Log::warning('Home team not found', ['home_team_id' => $match->home_team_id]);
+                Log::warning('Home team not found', ['home_team_id' => $match->home_team_id]);
             }
 
             if ($awayTeam) {
@@ -1142,7 +1172,7 @@ class MatchesController extends Controller
         }
 
         // Get database league IDs for the given Pinnacle IDs
-        $leagues = \DB::table('leagues')
+        $leagues = DB::table('leagues')
             ->whereIn('pinnacleId', $pinnacleIds)
             ->pluck('id')
             ->toArray();
