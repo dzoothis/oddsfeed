@@ -657,6 +657,9 @@ class PrematchSyncJob implements ShouldQueue
                     'match_type' => $matchType,
                     'live_status_id' => $liveStatusId,
                     'has_open_markets' => $match['is_have_open_markets'] ?? false,
+                    'home_score' => 0, // Prematch matches don't have scores yet
+                    'away_score' => 0, // Prematch matches don't have scores yet
+                    'match_duration' => null, // Prematch matches don't have duration yet
                     'odds_count' => 0,
                     'images' => [
                         'home_team_logo' => $homeEnrichment['logo_url'] ?? null,
@@ -803,13 +806,16 @@ class PrematchSyncJob implements ShouldQueue
                             'awayTeam' => $matchData['away_team'],
                             'home_team_id' => $matchData['home_team_id'],
                             'away_team_id' => $matchData['away_team_id'],
-                            'sportId' => $matchData['sport_id'],
-                            'leagueId' => $matchData['league_id'],
-                            'startTime' => $scheduledTime,
-                            'eventType' => $matchData['match_type'], // Keep eventType for backward compatibility
-                            'match_type' => $matchData['match_type'], // Add match_type for consistency
-                            'live_status_id' => $matchData['live_status_id'], // Add live_status_id
-                            'hasOpenMarkets' => $matchData['has_open_markets'],
+                        'sportId' => $matchData['sport_id'],
+                        'leagueId' => $matchData['league_id'],
+                        'startTime' => $scheduledTime,
+                        'eventType' => $matchData['match_type'], // Keep eventType for backward compatibility
+                        'match_type' => $matchData['match_type'], // Add match_type for consistency
+                        'live_status_id' => $matchData['live_status_id'], // Add live_status_id
+                        'hasOpenMarkets' => $matchData['has_open_markets'],
+                        'home_score' => $matchData['home_score'] ?? 0,
+                        'away_score' => $matchData['away_score'] ?? 0,
+                        'match_duration' => $matchData['match_duration'] ?? null,
                             'lastUpdated' => now()
                         ]
                     );

@@ -14,12 +14,13 @@ class ApiFootballService
     {
         $this->apiKey = env('FOOTBALL_KEY');
         $this->client = new Client();
+        $this->baseUrl = $this->getBaseUrlForSport(1); // Default to soccer
     }
 
     /**
      * Get the appropriate API base URL for a given sport
      */
-    private function getBaseUrlForSport($sportId)
+    public function getBaseUrlForSport($sportId)
     {
         switch ($sportId) {
             case 3: // Basketball
@@ -34,6 +35,22 @@ class ApiFootballService
             default:
                 return 'https://v3.football.api-sports.io';
         }
+    }
+
+    /**
+     * Get current base URL
+     */
+    public function getBaseUrl()
+    {
+        return $this->baseUrl;
+    }
+
+    /**
+     * Set base URL dynamically
+     */
+    public function setBaseUrl($baseUrl)
+    {
+        $this->baseUrl = $baseUrl;
     }
 
     public function getFixtures($league = null, $season = null, $live = false)

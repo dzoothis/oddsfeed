@@ -341,8 +341,14 @@ class MatchesController extends Controller
                 'league_name' => $match->league ? $match->league->name : 'League ' . $match->leagueId,
                 'scheduled_time' => $match->startTime ? $match->startTime->format('m/d/Y, H:i:s') : 'TBD',
                 'match_type' => $match->match_type ?? $match->eventType,
+                'betting_availability' => $match->betting_availability ?? 'prematch',
                 'live_status_id' => $match->live_status_id ?? 0,
                 'has_open_markets' => $match->hasOpenMarkets ?? false,
+                'score' => [
+                    'home' => $match->home_score ?? 0,
+                    'away' => $match->away_score ?? 0
+                ],
+                'duration' => $match->match_duration ?? null,
                 'odds_count' => 0, // Will be filled by attachOddsFromCache
                 'images' => [
                     'home_team_logo' => null, // Will be filled by attachImagesToMatches

@@ -28,6 +28,9 @@ class SportsMatch extends Model
         'hasOpenMarkets' => 'boolean',
         'live_status_id' => 'integer',
         'match_type' => 'string',
+        'betting_availability' => 'string',
+        'home_score' => 'integer',
+        'away_score' => 'integer',
     ];
 
     public function markets()

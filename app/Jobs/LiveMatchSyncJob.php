@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Services\PinnacleService;
 use App\Services\TeamResolutionService;
+use App\Services\ApiFootballService;
 use App\Models\SportsMatch;
 
 class LiveMatchSyncJob implements ShouldQueue
@@ -36,7 +37,7 @@ class LiveMatchSyncJob implements ShouldQueue
     /**
      * Execute the job - Phase 2: Background live match sync with caching
      */
-    public function handle(PinnacleService $pinnacleService, TeamResolutionService $teamResolutionService): void
+    public function handle(PinnacleService $pinnacleService, TeamResolutionService $teamResolutionService, ApiFootballService $apiFootballService): void
     {
         Log::info('LiveMatchSyncJob started - Phase 2 optimization', [
             'sportId' => $this->sportId,
@@ -84,6 +85,9 @@ class LiveMatchSyncJob implements ShouldQueue
                 ]);
                 return;
             }
+
+            // Step 1.75: Fetch live scores from API-Football and merge with Pinnacle data
+            $liveMatches = $this->mergeLiveScoresFromApiFootball($liveMatches, $apiFootballService);
 
             // Step 2: Process and resolve teams for all matches
             $processedMatches = $this->processMatchesWithTeamResolution(
@@ -166,7 +170,11 @@ class LiveMatchSyncJob implements ShouldQueue
                         date('m/d/Y, H:i:s', strtotime($match['starts'])) : 'TBD',
                     'match_type' => $matchType, // Determined by Pinnacle live_status_id
                     'live_status_id' => $liveStatusId,
+                    'betting_availability' => $match['betting_availability'] ?? 'prematch', // Preserve betting availability status
                     'has_open_markets' => $match['is_have_open_markets'] ?? false,
+                    'home_score' => $match['home_score'] ?? 0, // Live score from Pinnacle API
+                    'away_score' => $match['away_score'] ?? 0, // Live score from Pinnacle API
+                    'match_duration' => $match['clock'] ?? $match['period'] ?? null, // Match time/duration
                     'odds_count' => 0, // Will be updated by OddsSyncJob
                     'images' => [
                         'home_team_logo' => $homeEnrichment['logo_url'] ?? null,
@@ -292,7 +300,11 @@ class LiveMatchSyncJob implements ShouldQueue
                             'eventType' => $matchData['match_type'], // Keep eventType for backward compatibility
                             'match_type' => $matchData['match_type'], // Add match_type for consistency
                             'live_status_id' => $matchData['live_status_id'], // Add live_status_id
+                            'betting_availability' => $matchData['betting_availability'] ?? 'prematch', // New betting availability status
                             'hasOpenMarkets' => $matchData['has_open_markets'],
+                            'home_score' => $matchData['home_score'] ?? 0,
+                            'away_score' => $matchData['away_score'] ?? 0,
+                            'match_duration' => $matchData['match_duration'] ?? null,
                             'lastUpdated' => now()
                         ]
                     );
@@ -325,6 +337,7 @@ class LiveMatchSyncJob implements ShouldQueue
         return $existing->eventType != $new['match_type'] || // Allow match type transitions
                $existing->live_status_id != ($new['live_status_id'] ?? 0) ||
                $existing->hasOpenMarkets != $new['has_open_markets'] ||
+               $existing->betting_availability != ($new['betting_availability'] ?? 'prematch') ||
                $existing->startTime != ($new['scheduled_time'] !== 'TBD' ?
                    \DateTime::createFromFormat('m/d/Y, H:i:s', $new['scheduled_time']) : null);
     }
@@ -358,6 +371,287 @@ class LiveMatchSyncJob implements ShouldQueue
 
         // Any other transitions: Allow for now (could add more rules later)
         return true;
+    }
+
+    /**
+     * Merge live scores and status from API-Football with Pinnacle match data
+     */
+    private function mergeLiveScoresFromApiFootball($pinnacleMatches, ApiFootballService $apiFootballService)
+    {
+        try {
+            // Fetch all live fixtures from API-Football (soccer)
+            $liveFixturesData = $apiFootballService->getFixtures(null, null, true);
+            $liveFixtures = $liveFixturesData['response'] ?? [];
+
+            Log::info('Fetched live fixtures from API-Football', [
+                'live_fixtures_count' => count($liveFixtures)
+            ]);
+
+            if (empty($liveFixtures)) {
+                Log::info('No live fixtures from API-Football, returning original Pinnacle matches');
+                return $pinnacleMatches;
+            }
+
+            // Create lookup maps for API-Football fixtures
+            $liveLookup = [];
+            $prematchLookup = [];
+
+            // Index live fixtures by normalized team names
+            foreach ($liveFixtures as $fixture) {
+                $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
+                $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
+                $key = $homeTeam . '|' . $awayTeam;
+                $liveLookup[$key] = $fixture;
+            }
+
+            // For prematch, we could fetch some upcoming fixtures, but for now focus on live
+            // This can be enhanced later to also detect upcoming matches
+
+            // Merge live status and scores for each Pinnacle match
+            $mergedMatches = [];
+            $matchesWithLiveData = 0;
+            $matchesAvailableForBetting = 0;
+
+            foreach ($pinnacleMatches as $pinnacleMatch) {
+                $originalLiveStatusId = $pinnacleMatch['live_status_id'] ?? 0;
+
+                // Skip betting markets for better matching
+                $homeTeam = $this->normalizeTeamName($pinnacleMatch['home'] ?? '');
+                $awayTeam = $this->normalizeTeamName($pinnacleMatch['away'] ?? '');
+
+                // Skip if it looks like a betting market
+                if ($this->isBettingMarket($pinnacleMatch)) {
+                    $mergedMatches[] = $pinnacleMatch;
+                    continue;
+                }
+
+                $lookupKey = $homeTeam . '|' . $awayTeam;
+
+                // Check if this Pinnacle match has a corresponding live fixture in API-Football
+                $apiFootballFixture = $liveLookup[$lookupKey] ?? null;
+
+                if ($apiFootballFixture) {
+                    // This match is ACTUALLY LIVE! Enhanced with API-Football data
+                    $pinnacleMatch['home_score'] = $apiFootballFixture['goals']['home'] ?? 0;
+                    $pinnacleMatch['away_score'] = $apiFootballFixture['goals']['away'] ?? 0;
+
+                    // Update match duration with live status
+                    $status = $apiFootballFixture['fixture']['status']['long'] ?? '';
+                    $elapsed = $apiFootballFixture['fixture']['status']['elapsed'] ?? null;
+
+                    if ($elapsed) {
+                        $pinnacleMatch['clock'] = $elapsed . "' " . $status;
+                        $pinnacleMatch['period'] = $status;
+                    }
+
+                    // Set statuses
+                    $pinnacleMatch['live_status_id'] = 1; // Mark as live
+                    $pinnacleMatch['betting_availability'] = 'live'; // Actually live with scores
+
+                    $matchesWithLiveData++;
+
+                    Log::debug('Enhanced Pinnacle match with API-Football live data', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'score' => $pinnacleMatch['home_score'] . '-' . $pinnacleMatch['away_score'],
+                        'status' => $status,
+                        'elapsed' => $elapsed,
+                        'betting_availability' => 'live'
+                    ]);
+                } elseif ($originalLiveStatusId === 1) {
+                    // Pinnacle marks this as live for betting, but no API-Football enhancement
+                    $pinnacleMatch['betting_availability'] = 'available_for_betting';
+                    $matchesAvailableForBetting++;
+
+                    Log::debug('Pinnacle match available for betting (not actually live)', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'live_status_id' => $originalLiveStatusId,
+                        'betting_availability' => 'available_for_betting'
+                    ]);
+                } else {
+                    // Regular prematch match
+                    $pinnacleMatch['betting_availability'] = 'prematch';
+
+                    Log::debug('Pinnacle match set as prematch', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'betting_availability' => 'prematch'
+                    ]);
+                }
+
+                $mergedMatches[] = $pinnacleMatch;
+            }
+
+            Log::info('Completed live status and score enhancement', [
+                'total_pinnacle_matches' => count($pinnacleMatches),
+                'matches_enhanced_with_live_data' => $matchesWithLiveData
+            ]);
+
+            return $mergedMatches;
+
+            Log::info('Fetched live fixtures from API-Football', [
+                'live_fixtures_count' => count($liveFixtures)
+            ]);
+
+            if (empty($liveFixtures)) {
+                Log::info('No live fixtures from API-Football, returning original Pinnacle matches');
+                return $pinnacleMatches;
+            }
+
+            // Create lookup map for API-Football fixtures by normalized team names
+            $footballLookup = [];
+            foreach ($liveFixtures as $fixture) {
+                $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
+                $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
+                $key = $homeTeam . '|' . $awayTeam;
+                $footballLookup[$key] = $fixture;
+            }
+
+            // Merge scores for each Pinnacle match
+            $mergedMatches = [];
+            $matchesWithScores = 0;
+
+            foreach ($pinnacleMatches as $pinnacleMatch) {
+                $homeTeam = $this->normalizeTeamName($pinnacleMatch['home'] ?? '');
+                $awayTeam = $this->normalizeTeamName($pinnacleMatch['away'] ?? '');
+                $lookupKey = $homeTeam . '|' . $awayTeam;
+
+                // Try to find matching fixture in API-Football data
+                $footballFixture = $footballLookup[$lookupKey] ?? null;
+
+                if ($footballFixture) {
+                    // Merge live scores and duration from API-Football
+                    $pinnacleMatch['home_score'] = $footballFixture['goals']['home'] ?? 0;
+                    $pinnacleMatch['away_score'] = $footballFixture['goals']['away'] ?? 0;
+
+                    // Add match duration (clock/period from API-Football)
+                    $status = $footballFixture['fixture']['status']['long'] ?? '';
+                    $elapsed = $footballFixture['fixture']['status']['elapsed'] ?? null;
+
+                    if ($elapsed) {
+                        $pinnacleMatch['clock'] = $elapsed . "' " . $status;
+                        $pinnacleMatch['period'] = $status;
+                    }
+
+                    $matchesWithScores++;
+
+                    Log::debug('Merged live scores for match', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'home_score' => $pinnacleMatch['home_score'],
+                        'away_score' => $pinnacleMatch['away_score'],
+                        'duration' => $pinnacleMatch['clock'] ?? null
+                    ]);
+                } else {
+                    // No matching fixture found, keep original Pinnacle data (scores = 0)
+                    Log::debug('No API-Football match found for', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away']
+                    ]);
+                }
+
+                $mergedMatches[] = $pinnacleMatch;
+            }
+
+            Log::info('Completed live score merging', [
+                'total_pinnacle_matches' => count($pinnacleMatches),
+                'matches_with_scores' => $matchesWithScores
+            ]);
+
+            return $mergedMatches;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to merge live scores from API-Football', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Return original Pinnacle matches if API-Football fails
+            return $pinnacleMatches;
+        }
+    }
+
+    /**
+     * Map Pinnacle sport IDs to API-Football sport IDs
+     */
+    private function mapPinnacleToApiFootballSportId($pinnacleSportId)
+    {
+        $sportMapping = [
+            1 => 1,  // Soccer
+            2 => 2,  // Basketball? (need to verify)
+            3 => 3,  // Basketball
+            4 => 4,  // American Football
+            5 => 5,  // Hockey
+            6 => 6,  // Baseball
+            7 => 4,  // NFL (American Football)
+        ];
+
+        return $sportMapping[$pinnacleSportId] ?? null;
+    }
+
+    /**
+     * Check if a Pinnacle match appears to be a betting market rather than a real match
+     */
+    private function isBettingMarket($pinnacleMatch)
+    {
+        $homeTeam = $pinnacleMatch['home'] ?? '';
+        $awayTeam = $pinnacleMatch['away'] ?? '';
+        $leagueName = $pinnacleMatch['league_name'] ?? '';
+
+        // Check for parentheses in team names (indicates betting markets)
+        if (preg_match('/\([^)]*\)/', $homeTeam) || preg_match('/\([^)]*\)/', $awayTeam)) {
+            return true;
+        }
+
+        // Check for betting market keywords in league name
+        if (preg_match('/corners|cards|bookings|offsides|throw.*ins/i', $leagueName)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if an API-Football fixture is currently live
+     */
+    private function isApiFootballMatchLive($apiFootballFixture)
+    {
+        $status = $apiFootballFixture['fixture']['status']['long'] ?? '';
+
+        $liveStatuses = [
+            'First Half',
+            'Halftime',
+            'Second Half',
+            'Extra Time',
+            'Penalty',
+            'Match Suspended'
+        ];
+
+        return in_array($status, $liveStatuses);
+    }
+
+    /**
+     * Normalize team names for better matching between APIs
+     */
+    private function normalizeTeamName($teamName)
+    {
+        if (!$teamName) return '';
+
+        // Convert to lowercase and remove common suffixes/prefixes
+        $normalized = strtolower($teamName);
+
+        // Remove common team name variations
+        $normalized = preg_replace('/\s+(fc|ac|cf|sc|club|united|city|town|athletic|wanderers|rovers|hotspur|albion|villans?)\b/i', '', $normalized);
+        $normalized = preg_replace('/\b(fc|ac|cf|sc|club|united|city|town|athletic|wanderers|rovers|hotspur|albion|villans?)\s+/i', '', $normalized);
+
+        // Remove age group suffixes (U20, U19, etc.)
+        $normalized = preg_replace('/\s+u\d+\b/i', '', $normalized);
+
+        // Remove extra spaces and trim
+        $normalized = trim(preg_replace('/\s+/', ' ', $normalized));
+
+        return $normalized;
     }
 
     private function dispatchVenueEnrichmentIfNeeded($matchId): void

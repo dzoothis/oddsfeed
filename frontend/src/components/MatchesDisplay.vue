@@ -60,6 +60,9 @@
                   </div>
                   <div class="team-details">
                     <div class="team-name font-semibold text-gray-900 text-lg">{{ match.home_team }}</div>
+                    <div v-if="match.score && match.betting_availability === 'live'" class="score-display text-xl font-bold text-blue-600">
+                      {{ match.score.home }}
+                    </div>
                     <div v-if="match.home_team_data?.venue" class="text-xs text-gray-500">
                       {{ match.home_team_data.venue.city || match.home_team_data.venue.name }}
                     </div>
@@ -71,8 +74,12 @@
                   <div class="text-center">
                     <div class="text-2xl font-bold text-gray-400 mb-1">VS</div>
                     <span :class="['inline-flex items-center px-2 py-1 text-xs font-medium rounded-full',
-                      match.match_type === 'live' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800']">
-                      {{ match.match_type === 'live' ? 'LIVE' : 'PREMATCH' }}
+                      match.betting_availability === 'live' ? 'bg-red-100 text-red-800' :
+                      match.betting_availability === 'available_for_betting' ? 'bg-orange-100 text-orange-800' :
+                      'bg-blue-100 text-blue-800']">
+                      {{ match.betting_availability === 'live' ? 'LIVE' :
+                         match.betting_availability === 'available_for_betting' ? 'AVAILABLE BETTING' :
+                         'PREMATCH' }}
                     </span>
                   </div>
                 </div>
@@ -81,6 +88,9 @@
                 <div class="team-info flex items-center space-x-3 flex-1 justify-end">
                   <div class="team-details text-right">
                     <div class="team-name font-semibold text-gray-900 text-lg">{{ match.away_team }}</div>
+                    <div v-if="match.score && match.betting_availability === 'live'" class="score-display text-xl font-bold text-blue-600">
+                      {{ match.score.away }}
+                    </div>
                     <div v-if="match.away_team_data?.venue" class="text-xs text-gray-500">
                       {{ match.away_team_data.venue.city || match.away_team_data.venue.name }}
                     </div>
@@ -104,6 +114,9 @@
                   <span class="match-league font-medium text-gray-900">{{ match.league_name || match.league }}</span>
                   <span v-if="match.home_team_data?.country" class="match-country px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded">
                     {{ match.home_team_data.country }}
+                  </span>
+                  <span v-if="match.duration && match.match_type === 'live'" class="match-duration px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded font-medium">
+                    {{ match.duration }}
                   </span>
                   <span v-if="match.match_type !== 'live'" class="match-time font-medium">{{ formatMatchTime(match) }}</span>
                 </div>

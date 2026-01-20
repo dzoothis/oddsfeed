@@ -103,6 +103,11 @@
                 matchTypeFilter === 'live' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
               Live ({{ liveMatchesCount }})
             </button>
+            <button @click="setMatchTypeFilter('available_for_betting')"
+              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
+                matchTypeFilter === 'available_for_betting' ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
+              Available for Betting ({{ availableForBettingCount }})
+            </button>
             <button @click="setMatchTypeFilter('prematch')"
               :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
                 matchTypeFilter === 'prematch' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
@@ -446,11 +451,15 @@ const isRefreshing = ref(false)
 
 // Computed properties
 const liveMatchesCount = computed(() =>
-  allMatches.value.filter(match => match.match_type === 'live').length
+  allMatches.value.filter(match => match.betting_availability === 'live').length
+)
+
+const availableForBettingCount = computed(() =>
+  allMatches.value.filter(match => match.betting_availability === 'available_for_betting').length
 )
 
 const upcomingMatchesCount = computed(() =>
-  allMatches.value.filter(match => match.match_type === 'prematch').length
+  allMatches.value.filter(match => match.betting_availability === 'prematch').length
 )
 
 const filteredMatches = computed(() => {
@@ -458,7 +467,11 @@ const filteredMatches = computed(() => {
 
   // Filter by match type
   if (matchTypeFilter.value !== 'all') {
-    matches = matches.filter(match => match.match_type === matchTypeFilter.value)
+    if (matchTypeFilter.value === 'available_for_betting') {
+      matches = matches.filter(match => match.betting_availability === 'available_for_betting')
+    } else {
+      matches = matches.filter(match => match.betting_availability === matchTypeFilter.value)
+    }
   }
 
   // Filter by search term
@@ -556,12 +569,16 @@ const loadAllMatchesForSport = async () => {
 
     allMatches.value = response.data.matches || []
 
-    // Sort matches: live first, then by date
+    // Sort matches: live first, then available for betting, then prematch, by date
     allMatches.value.sort((a, b) => {
-      if (a.match_type === 'live' && b.match_type !== 'live') return -1
-      if (b.match_type === 'live' && a.match_type !== 'live') return 1
+      const aPriority = a.betting_availability === 'live' ? 3 :
+                       a.betting_availability === 'available_for_betting' ? 2 : 1
+      const bPriority = b.betting_availability === 'live' ? 3 :
+                       b.betting_availability === 'available_for_betting' ? 2 : 1
 
-      // For same type, sort by time
+      if (aPriority !== bPriority) return bPriority - aPriority
+
+      // For same priority, sort by time
       const aTime = new Date(a.scheduled_time || a.last_updated || '2026-01-01')
       const bTime = new Date(b.scheduled_time || b.last_updated || '2026-01-01')
       return aTime - bTime
