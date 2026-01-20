@@ -695,15 +695,25 @@ const selectLeaguesSport = async (sport) => {
 }
 
 const filteredLeagues = computed(() => {
-  if (!leaguesSearch.value.trim()) {
-    return leaguesData.value
+  let leagues = [...leaguesData.value]
+
+  // First sort by availability (available leagues first)
+  leagues.sort((a, b) => {
+    const aHasOfferings = a.has_offerings ? 1 : 0
+    const bHasOfferings = b.has_offerings ? 1 : 0
+    return bHasOfferings - aHasOfferings // Available first (descending)
+  })
+
+  // Then apply search filter if there's a search term
+  if (leaguesSearch.value.trim()) {
+    const searchTerm = leaguesSearch.value.toLowerCase().trim()
+    leagues = leagues.filter(league =>
+      league.name?.toLowerCase().includes(searchTerm) ||
+      league.container?.toLowerCase().includes(searchTerm)
+    )
   }
 
-  const searchTerm = leaguesSearch.value.toLowerCase().trim()
-  return leaguesData.value.filter(league =>
-    league.name?.toLowerCase().includes(searchTerm) ||
-    league.container?.toLowerCase().includes(searchTerm)
-  )
+  return leagues
 })
 
 // Manual refresh functionality
