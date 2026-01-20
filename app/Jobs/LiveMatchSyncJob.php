@@ -16,7 +16,6 @@ class LiveMatchSyncJob implements ShouldQueue
     use Queueable;
 
     // Queue configuration for live match synchronization
-    public $queue = 'live-sync'; // Use live-sync queue
     public $tries = 3; // Retry up to 3 times for network/API failures
     public $timeout = 600; // 10 minutes timeout for live data operations
     public $backoff = [30, 90, 300]; // Exponential backoff: 30s, 1.5min, 5min
@@ -33,6 +32,7 @@ class LiveMatchSyncJob implements ShouldQueue
     {
         $this->sportId = $sportId;
         $this->leagueIds = $leagueIds;
+        $this->queue = 'live-sync'; // Set queue in constructor
     }
 
     /**
