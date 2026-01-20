@@ -1,5 +1,15 @@
 <template>
   <div class="min-h-screen bg-gray-50">
+    <!-- Full Page Loading Overlay -->
+    <div v-if="pageLoading" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div class="bg-white rounded-lg shadow-xl p-8 flex flex-col items-center space-y-4">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <div class="text-center">
+          <h3 class="text-lg font-semibold text-gray-900">Loading Matches</h3>
+          <p class="text-sm text-gray-600 mt-1">Please wait while we fetch the latest data...</p>
+        </div>
+      </div>
+    </div>
     <div v-if="!isAuthenticated" class="min-h-screen bg-gray-50 flex items-center justify-center">
       <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md">
         <h1 class="text-2xl font-bold text-gray-900 mb-2 text-center">Sports Feed Dashboard</h1>
@@ -64,7 +74,7 @@
           <button @click="loadAllMatchesForSport" :disabled="loadingMatches"
             class="w-full px-6 py-3 bg-green-600 text-white rounded-lg">
             <span v-if="loadingMatches">Loading Matches...</span>
-            <span v-else>Get Matches for {{ selectedSport.name }}</span>
+            <span v-else>Get Matches</span>
           </button>
         </div>
       </div>
@@ -403,6 +413,7 @@ const selectedSport = ref(null)
 const allMatches = ref([])
 const allMatchesLoaded = ref(false)
 const loadingMatches = ref(false)
+const pageLoading = ref(false) // Full page loading overlay
 const matchTypeFilter = ref('all')
 const matchSearchTerm = ref('')
 const pageTrigger = ref(0)
@@ -529,6 +540,7 @@ const loadAllMatchesForSport = async () => {
   if (!selectedSport.value) return
 
   loadingMatches.value = true
+  pageLoading.value = true
   try {
     const response = await http.post(API_ENDPOINTS.MATCHES, {
       sport_id: selectedSport.value.pinnacleId || selectedSport.value.id
@@ -555,6 +567,7 @@ const loadAllMatchesForSport = async () => {
     allMatches.value = []
   } finally {
     loadingMatches.value = false
+    pageLoading.value = false
   }
 }
 
