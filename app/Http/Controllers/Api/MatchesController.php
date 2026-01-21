@@ -472,6 +472,15 @@ class MatchesController extends Controller
             $matches = array_merge($matches, $prematchMatches);
         }
 
+        // Handle 'available_for_betting' filter by post‑filtering cached matches
+        if ($matchType === 'available_for_betting') {
+            $matches = array_filter($matches, function ($m) {
+                return (isset($m['betting_availability']) && $m['betting_availability'] === 'available_for_betting');
+            });
+            // Re‑index array to ensure JSON encoding produces a proper list
+            $matches = array_values($matches);
+        }
+
         return $matches;
     }
 

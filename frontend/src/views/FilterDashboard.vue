@@ -83,16 +83,18 @@
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <h3 class="text-lg font-semibold text-gray-900">Matches ({{ filteredMatches.length }})</h3>
-            <button @click="manualRefresh"
-              :disabled="isRefreshing || !selectedSport"
+            <button @click="manualRefresh" :disabled="isRefreshing || !selectedSport"
               :title="isRefreshing ? 'Refreshing...' : 'Refresh data'"
               class="p-2 text-sm font-medium text-green-600 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               <svg v-if="isRefreshing" class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                </path>
               </svg>
               <svg v-else class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
           </div>
@@ -268,7 +270,8 @@
       </div>
 
       <!-- Leagues Modal -->
-      <div v-if="showLeaguesModal" :key="leaguesModalTrigger" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click="closeLeaguesModal">
+      <div v-if="showLeaguesModal" :key="leaguesModalTrigger"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click="closeLeaguesModal">
         <div class="bg-white w-full max-w-6xl h-[85vh] rounded-lg shadow-sm border border-gray-200 flex flex-col"
           @click.stop>
 
@@ -338,18 +341,15 @@
               <div class="flex-1 overflow-y-auto p-6 bg-gray-50">
 
                 <!-- Empty States -->
-                <div v-if="!leaguesSelectedSport"
-                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                <div v-if="!leaguesSelectedSport" class="h-full flex items-center justify-center text-sm text-gray-500">
                   Select a sport to view leagues
                 </div>
 
-                <div v-else-if="leaguesLoading"
-                  class="h-full flex items-center justify-center text-sm text-gray-500">
+                <div v-else-if="leaguesLoading" class="h-full flex items-center justify-center text-sm text-gray-500">
                   Loading leagues...
                 </div>
 
-                <div v-else-if="leaguesError"
-                  class="h-full flex items-center justify-center text-center">
+                <div v-else-if="leaguesError" class="h-full flex items-center justify-center text-center">
                   <div class="text-red-500 mb-4 text-4xl">⚠️</div>
                   <p class="text-red-600 mb-4">{{ leaguesError }}</p>
                   <button @click="selectLeaguesSport(leaguesSelectedSport)"
@@ -381,10 +381,9 @@
                         </div>
                       </div>
                       <div class="flex items-center gap-2">
-                        <span class="px-2 py-1 text-xs font-medium rounded-full"
-                          :class="league.has_offerings
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'">
+                        <span class="px-2 py-1 text-xs font-medium rounded-full" :class="league.has_offerings
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-gray-100 text-gray-800'">
                           {{ league.has_offerings ? 'Available' : 'Inactive' }}
                         </span>
                       </div>
@@ -466,8 +465,9 @@ const filteredMatches = computed(() => {
   let matches = [...allMatches.value]
 
   // Filter by match type
-  // Match type filtering is now handled by backend API
-  // No client-side filtering needed for match types
+  if (matchTypeFilter.value !== 'all') {
+    matches = matches.filter(match => match.betting_availability === matchTypeFilter.value)
+  }
 
   // Filter by search term
   if (matchSearchTerm.value.trim()) {
@@ -567,9 +567,9 @@ const loadAllMatchesForSport = async () => {
     // Sort matches: live first, then available for betting, then prematch, by date
     allMatches.value.sort((a, b) => {
       const aPriority = a.betting_availability === 'live' ? 3 :
-                       a.betting_availability === 'available_for_betting' ? 2 : 1
+        a.betting_availability === 'available_for_betting' ? 2 : 1
       const bPriority = b.betting_availability === 'live' ? 3 :
-                       b.betting_availability === 'available_for_betting' ? 2 : 1
+        b.betting_availability === 'available_for_betting' ? 2 : 1
 
       if (aPriority !== bPriority) return bPriority - aPriority
 
