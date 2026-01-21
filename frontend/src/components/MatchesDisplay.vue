@@ -122,10 +122,12 @@
                 </div>
 
                 <div class="match-status-group flex items-center space-x-3">
-                  <!-- Updated Badge -->
-                  <span v-if="match.last_updated" class="updated-badge px-2 py-1 bg-green-50 text-green-700 text-xs rounded-md font-medium border border-green-200">
+                  <!-- Match Updated Badge -->
+                  <!-- Shows when the entire match data was last updated from the API -->
+                  <!--Uncomment -->
+                  <!-- <span v-if="match.last_updated" class="updated-badge px-2 py-1 bg-green-50 text-green-700 text-xs rounded-md font-medium border border-green-200">
                     Updated {{ formatTimeAgo(match.last_updated) }} ago
-                  </span>
+                  </span> -->
 
                   <!-- Markets Badge -->
                   <div v-if="match.has_open_markets || match.odds_count > 0" class="markets-badge flex items-center space-x-1">
@@ -291,9 +293,12 @@
                             <td class="market-table-td px-4 py-3">{{ odd.line || '-' }}</td>
                             <td class="market-table-td px-4 py-3">
                               <span class="font-mono font-semibold text-blue-600">{{ odd.odds }}</span>
-                              <span v-if="odd.updated_at" class="ml-1.5 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs rounded font-medium">
+                              <!-- Individual Odds Updated Badge -->
+                              <!-- Shows when this specific betting odds was last updated -->
+                              <!-- Uncomment -->
+                              <!-- <span v-if="odd.updated_at" class="ml-1.5 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs rounded font-medium">
                                 Updated {{ formatTimeAgo(odd.updated_at) }} ago
-                              </span>
+                              </span> -->
                             </td>
                             <td class="market-table-td px-4 py-3">
                               <span :class="['status-badge px-2 py-1 text-xs rounded font-medium',
@@ -635,6 +640,9 @@
     });
   };
   
+  // Utility function to format timestamps as relative time (e.g., "5m ago", "2h ago")
+  // Used by both match updated time and individual odds updated time displays
+  // Handles various timestamp formats and converts to human-readable relative time
   const formatTimeAgo = (timestamp) => {
     if (!timestamp) return '';
 
