@@ -404,13 +404,110 @@ class LiveMatchSyncJob implements ShouldQueue
             $liveFixturesData = $apiFootballService->getFixtures(null, null, true);
             $liveFixtures = $liveFixturesData['response'] ?? [];
 
-            Log::info('Fetched live fixtures from API-Football', [
-                'live_fixtures_count' => count($liveFixtures)
+            // Also fetch recently finished fixtures to filter out finished matches
+            $finishedFixturesData = $apiFootballService->getFinishedFixtures();
+            $finishedFixtures = $finishedFixturesData['response'] ?? [];
+
+            Log::info('Fetched fixtures from API-Football', [
+                'live_fixtures_count' => count($liveFixtures),
+                'finished_fixtures_count' => count($finishedFixtures)
             ]);
 
+            // Create lookup for finished matches to filter them out
+            $finishedMatchesLookup = [];
+            $finishedMatchesCacheKeys = [];
+
+            foreach ($finishedFixtures as $fixture) {
+                $status = $fixture['fixture']['status']['short'] ?? '';
+                // Only consider truly finished matches (FT = Full Time, AET = After Extra Time, etc.)
+                if (in_array($status, ['FT', 'AET', 'PEN', 'AWD', 'AET', 'Canc'])) {
+                    $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
+                    $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
+                    $key = $homeTeam . '|' . $awayTeam;
+                    $finishedMatchesLookup[$key] = [
+                        'fixture' => $fixture,
+                        'status' => $status
+                    ];
+
+                    // Collect cache keys that need to be cleared for this sport
+                    if ($this->sportId) {
+                        $finishedMatchesCacheKeys[] = "live_matches:{$this->sportId}:{$fixture['league']['id']}";
+                    }
+                }
+            }
+
+            // Clear cache entries for finished matches
+            // We need to clear cache for ALL leagues since finished matches could be from any league
+            $cacheClearedCount = 0;
+            if (!empty($finishedMatchesLookup)) {
+                // If we have specific leagues requested, only clear those
+                $leaguesToClear = !empty($this->leagueIds) ? $this->leagueIds : [];
+
+                // If no specific leagues, we need to clear cache for all leagues that have finished matches
+                if (empty($leaguesToClear)) {
+                    $leaguesToClear = [];
+                    foreach ($finishedFixtures as $fixture) {
+                        $leagueId = $fixture['league']['id'] ?? null;
+                        if ($leagueId && !in_array($leagueId, $leaguesToClear)) {
+                            $leaguesToClear[] = $leagueId;
+                        }
+                    }
+                }
+
+                // Clear live matches cache for affected leagues
+                foreach ($leaguesToClear as $leagueId) {
+                    $cacheKey = "live_matches:{$this->sportId}:{$leagueId}";
+                    \Illuminate\Support\Facades\Cache::forget($cacheKey);
+                    $cacheClearedCount++;
+
+                    // Also clear stale cache
+                    $staleCacheKey = "live_matches_stale:{$this->sportId}:{$leagueId}";
+                    \Illuminate\Support\Facades\Cache::forget($staleCacheKey);
+                }
+
+                Log::info('Cleared cache entries for finished matches', [
+                    'leagues_cleared' => count($leaguesToClear),
+                    'finished_matches_found' => count($finishedMatchesLookup)
+                ]);
+            }
+
+            // Filter out finished matches from Pinnacle matches BEFORE processing
+            $filteredPinnacleMatches = [];
+            $finishedMatchesFiltered = 0;
+
+            foreach ($pinnacleMatches as $pinnacleMatch) {
+                $homeTeam = $this->normalizeTeamName($pinnacleMatch['home'] ?? '');
+                $awayTeam = $this->normalizeTeamName($pinnacleMatch['away'] ?? '');
+                $lookupKey = $homeTeam . '|' . $awayTeam;
+
+                if (isset($finishedMatchesLookup[$lookupKey])) {
+                    $finishedMatchesFiltered++;
+                    Log::debug('Filtered out finished match from live processing', [
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'api_football_status' => $finishedMatchesLookup[$lookupKey]['status']
+                    ]);
+                    continue; // Skip this finished match
+                }
+
+                $filteredPinnacleMatches[] = $pinnacleMatch;
+            }
+
+            Log::info('Filtered finished matches from live processing', [
+                'original_pinnacle_matches' => count($pinnacleMatches),
+                'filtered_matches' => count($filteredPinnacleMatches),
+                'finished_matches_removed' => $finishedMatchesFiltered
+            ]);
+
+            // If no matches remain after filtering, return early
+            if (empty($filteredPinnacleMatches)) {
+                Log::info('No live matches remain after filtering finished matches');
+                return [];
+            }
+
             if (empty($liveFixtures)) {
-                Log::info('No live fixtures from API-Football, returning original Pinnacle matches');
-                return $pinnacleMatches;
+                Log::info('No live fixtures from API-Football, returning filtered Pinnacle matches');
+                return $filteredPinnacleMatches;
             }
 
             // Create lookup maps for API-Football fixtures
@@ -433,7 +530,7 @@ class LiveMatchSyncJob implements ShouldQueue
             $matchesWithLiveData = 0;
             $matchesAvailableForBetting = 0;
 
-            foreach ($pinnacleMatches as $pinnacleMatch) {
+            foreach ($filteredPinnacleMatches as $pinnacleMatch) {
                 $originalLiveStatusId = $pinnacleMatch['live_status_id'] ?? 0;
 
                 // Skip betting markets for better matching
@@ -505,8 +602,9 @@ class LiveMatchSyncJob implements ShouldQueue
             }
 
             Log::info('Completed live status and score enhancement', [
-                'total_pinnacle_matches' => count($pinnacleMatches),
-                'matches_enhanced_with_live_data' => $matchesWithLiveData
+                'total_filtered_pinnacle_matches' => count($filteredPinnacleMatches),
+                'matches_enhanced_with_live_data' => $matchesWithLiveData,
+                'finished_matches_filtered_out' => $finishedMatchesFiltered
             ]);
 
             return $mergedMatches;
