@@ -35,7 +35,6 @@ class LiveMatchSyncJob implements ShouldQueue
     {
         $this->sportId = $sportId;
         $this->leagueIds = $leagueIds;
-        $this->queue = 'live-sync'; // Set queue in constructor
     }
 
     /**
