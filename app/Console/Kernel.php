@@ -15,13 +15,10 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // Phase 2: Background sync jobs for optimized match fetching
-
         // Live matches - high priority, frequent updates
         $schedule->job(new LiveMatchSyncJob())
             ->everyMinute()
             ->withoutOverlapping()
-            ->runInBackground()
             ->onQueue('live-sync')
             ->name('live-match-sync');
 
@@ -29,7 +26,6 @@ class Kernel extends ConsoleKernel
         $schedule->job(new OddsSyncJob())
             ->everyMinute()
             ->withoutOverlapping()
-            ->runInBackground()
             ->onQueue('odds-sync')
             ->name('odds-sync');
 
@@ -37,7 +33,6 @@ class Kernel extends ConsoleKernel
         $schedule->job(new PrematchSyncJob())
             ->everyFiveMinutes()
             ->withoutOverlapping()
-            ->runInBackground()
             ->onQueue('prematch-sync')
             ->name('prematch-sync');
 
@@ -45,7 +40,6 @@ class Kernel extends ConsoleKernel
         $schedule->command('sports:manage-player-data')
             ->everyTenMinutes()
             ->withoutOverlapping()
-            ->runInBackground()
             ->name('player-data-management');
 
         // Player data monitoring - alert about issues
@@ -57,10 +51,9 @@ class Kernel extends ConsoleKernel
         $schedule->command('queue:prune-failed', ['--hours' => 24])
             ->daily();
 
-        // Comprehensive system health monitoring - check queues, data freshness, critical data
+        // Comprehensive system health monitoring
         $schedule->command('queue:health-check --restart --fix')
             ->everyFiveMinutes()
-            ->runInBackground()
             ->withoutOverlapping()
             ->name('system-health-check');
     }
