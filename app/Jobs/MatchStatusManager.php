@@ -287,23 +287,57 @@ class MatchStatusManager implements ShouldQueue
                     $reasons[] = 'available_but_not_live';
                 }
 
-                // Remove if confidence is high enough OR in aggressive mode with lower threshold
-                $shouldRemove = ($confidence >= 30) || ($this->aggressive && $confidence >= 15);
+                // Determine action based on league coverage and confidence
+                $shouldMarkFinished = false;
+                $shouldMarkSoftFinished = false;
+                $action = 'none';
 
-                if ($shouldRemove) {
-                    Log::info('Match finished - time-based rules', [
+                // Get league coverage type
+                $leagueCoverage = $this->getLeagueCoverage($match);
+
+                if ($confidence >= 30) {
+                    // High confidence - decide based on league coverage
+                    if ($leagueCoverage === 'major') {
+                        $shouldMarkFinished = true;
+                        $action = 'finished';
+                    } else {
+                        // Regional or unknown leagues get soft_finished
+                        $shouldMarkSoftFinished = true;
+                        $action = 'soft_finished';
+                    }
+                } elseif ($this->aggressive && $confidence >= 15) {
+                    // Aggressive mode with lower threshold - same logic
+                    if ($leagueCoverage === 'major') {
+                        $shouldMarkFinished = true;
+                        $action = 'finished_aggressive';
+                    } else {
+                        $shouldMarkSoftFinished = true;
+                        $action = 'soft_finished_aggressive';
+                    }
+                }
+
+                if ($shouldMarkFinished || $shouldMarkSoftFinished) {
+                    Log::info('Match status update - time-based rules', [
                         'match_id' => $match->eventId,
+                        'league_id' => $match->leagueId,
+                        'league_coverage' => $leagueCoverage,
                         'home_team' => $match->homeTeam,
                         'away_team' => $match->awayTeam,
                         'scheduled_time' => $match->startTime,
                         'hours_past' => round($hoursPast, 1),
                         'confidence' => $confidence,
                         'reasons' => implode(', ', $reasons),
+                        'action' => $action,
                         'aggressive_mode' => $this->aggressive
                     ]);
 
-                    $match->delete();
-                    $removedCount++;
+                    if ($shouldMarkFinished) {
+                        $match->markAsFinished();
+                        $removedCount++;
+                    } elseif ($shouldMarkSoftFinished) {
+                        $match->markAsSoftFinished();
+                        $removedCount++; // Count as "removed" from active status
+                    }
 
                     $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
                 }
@@ -509,6 +543,34 @@ class MatchStatusManager implements ShouldQueue
                 'error' => $e->getMessage()
             ]);
         }
+    }
+
+    /**
+     * Get league coverage type for a match
+     */
+    private function getLeagueCoverage(SportsMatch $match): string
+    {
+        try {
+            if ($match->league) {
+                return $match->league->getCoverageType();
+            }
+
+            // Fallback: try to find league by pinnacleId
+            $league = \App\Models\League::where('pinnacleId', $match->leagueId)->first();
+            if ($league) {
+                return $league->getCoverageType();
+            }
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to get league coverage, defaulting to regional', [
+                'match_id' => $match->eventId,
+                'league_id' => $match->leagueId,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // Default to regional for unknown leagues
+        return 'regional';
     }
 
     /**

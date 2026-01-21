@@ -250,10 +250,14 @@ class MatchesController extends Controller
             }
             // 'all' type includes both prematch and live
 
-            // Exclude finished matches (matches that are not live and have no open markets)
+            // Exclude finished and soft_finished matches
+            // Only include: live matches OR matches with open betting markets that are not soft_finished
             $query->where(function($q) {
-                $q->where('live_status_id', '>', 0) // Either actively live
-                  ->orWhere('hasOpenMarkets', true); // Or have open betting markets
+                $q->where('live_status_id', '>', 0) // Actively live matches
+                  ->where('live_status_id', '!=', -1); // Exclude soft_finished
+            })->orWhere(function($q) {
+                $q->where('hasOpenMarkets', true) // Have open betting markets
+                  ->where('live_status_id', '!=', -1); // But exclude soft_finished
             });
 
             Log::debug('Matches query filters applied', [

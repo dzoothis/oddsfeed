@@ -33,6 +33,11 @@ class SportsMatch extends Model
         'away_score' => 'integer',
     ];
 
+    // Match status constants
+    const STATUS_LIVE = 1;
+    const STATUS_FINISHED = 2;
+    const STATUS_SOFT_FINISHED = -1;
+
     public function markets()
     {
         return $this->hasMany(Market::class, 'eventId', 'eventId');
@@ -65,5 +70,57 @@ class SportsMatch extends Model
     public function league()
     {
         return $this->belongsTo(League::class, 'leagueId', 'pinnacleId');
+    }
+
+    /**
+     * Check if match is in live status
+     */
+    public function isLive(): bool
+    {
+        return $this->live_status_id === self::STATUS_LIVE;
+    }
+
+    /**
+     * Check if match is finished
+     */
+    public function isFinished(): bool
+    {
+        return $this->live_status_id === self::STATUS_FINISHED;
+    }
+
+    /**
+     * Check if match is soft finished
+     */
+    public function isSoftFinished(): bool
+    {
+        return $this->live_status_id === self::STATUS_SOFT_FINISHED;
+    }
+
+    /**
+     * Check if match is available for live betting
+     */
+    public function isAvailableForLiveBetting(): bool
+    {
+        return $this->isLive() && $this->hasOpenMarkets && $this->betting_availability === 'live';
+    }
+
+    /**
+     * Mark match as soft finished
+     */
+    public function markAsSoftFinished(): bool
+    {
+        $this->live_status_id = self::STATUS_SOFT_FINISHED;
+        $this->lastUpdated = now();
+        return $this->save();
+    }
+
+    /**
+     * Mark match as finished
+     */
+    public function markAsFinished(): bool
+    {
+        $this->live_status_id = self::STATUS_FINISHED;
+        $this->lastUpdated = now();
+        return $this->save();
     }
 }
