@@ -78,13 +78,35 @@ class FinishedMatchManager extends Command
     {
         $this->info("Checking for finished matches (Sport ID: {$sportId})");
 
-        // Get matches that might be finished
+        // Get matches that might be finished (prioritize by risk level)
+        $sixHoursAgo = now()->subHours(6);
+        $twentyFourHoursAgo = now()->subHours(24);
+
         $potentiallyFinished = SportsMatch::where('sportId', $sportId)
-            ->where(function($query) {
-                $query->where('live_status_id', 0)
-                      ->orWhere('betting_availability', '!=', 'live');
+            ->where(function($query) use ($sixHoursAgo, $twentyFourHoursAgo) {
+                // High risk: Not updated in 24+ hours
+                $query->where('lastUpdated', '<', $twentyFourHoursAgo)
+                      // Medium risk: Available for betting but not updated in 6+ hours
+                      ->orWhere(function($q) use ($sixHoursAgo) {
+                          $q->where('betting_availability', 'available_for_betting')
+                            ->where('lastUpdated', '<', $sixHoursAgo);
+                      })
+                      // Medium risk: Marked as live but past scheduled time
+                      ->orWhere(function($q) {
+                          $q->where('live_status_id', 1)
+                            ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 4 HOUR)');
+                      });
             })
-            ->orderBy('lastUpdated', 'desc')
+            ->orderByRaw("
+                CASE
+                    WHEN lastUpdated < DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN 1
+                    WHEN lastUpdated < DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 2
+                    WHEN (betting_availability = 'available_for_betting' AND lastUpdated < DATE_SUB(NOW(), INTERVAL 6 HOUR)) THEN 3
+                    WHEN (live_status_id = 1 AND startTime < DATE_SUB(NOW(), INTERVAL 4 HOUR)) THEN 4
+                    ELSE 5
+                END ASC,
+                lastUpdated ASC
+            ")
             ->limit(20)
             ->get();
 
@@ -233,10 +255,16 @@ class FinishedMatchManager extends Command
         $scheduledTime = strtotime($match->startTime);
         $hoursPastScheduled = (time() - $scheduledTime) / 3600;
 
+        // Critical: Not updated in 48+ hours
         if ($hoursSinceUpdate > 48) return '🔴 Critical';
+
+        // High: Not updated in 24+ hours
         if ($hoursSinceUpdate > 24) return '🟠 High';
-        if ($hoursPastScheduled > 6 && $match->live_status_id == 0) return '🟡 Medium';
-        if ($match->betting_availability === 'available_for_betting' && $hoursSinceUpdate > 12) return '🟡 Medium';
+
+        // Medium: Past scheduled time OR old available_for_betting matches
+        if ($hoursPastScheduled > 4) return '🟡 Medium';
+        if ($match->betting_availability === 'available_for_betting' && $hoursSinceUpdate > 6) return '🟡 Medium';
+        if ($match->live_status_id == 1 && $hoursSinceUpdate > 12) return '🟡 Medium';
 
         return '🟢 Low';
     }

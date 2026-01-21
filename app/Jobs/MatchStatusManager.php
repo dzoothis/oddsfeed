@@ -239,16 +239,17 @@ class MatchStatusManager implements ShouldQueue
     private function timeBasedCleanup(): array
     {
         $removedCount = 0;
+        $checkedCount = 0;
 
         try {
-            // Remove matches that are significantly past their scheduled time
-            $thresholdHours = $this->aggressive ? 2 : 4; // More aggressive = shorter threshold
+            // More aggressive threshold for comprehensive cleanup
+            $thresholdHours = $this->aggressive ? 1 : 3; // More aggressive = shorter threshold
             $threshold = now()->subHours($thresholdHours);
 
+            // Find matches that are past their scheduled time
             $pastDueMatches = SportsMatch::where('sportId', $this->sportId)
-                ->where('scheduled_time', '<', $threshold)
-                ->where('live_status_id', 0) // Not live
-                ->where('betting_availability', '!=', 'live')
+                ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL ? HOUR)', [$thresholdHours])
+                ->where('betting_availability', '!=', 'live') // Not actively live
                 ->get();
 
             Log::info('Time-based cleanup check', [
@@ -257,17 +258,44 @@ class MatchStatusManager implements ShouldQueue
             ]);
 
             foreach ($pastDueMatches as $match) {
-                // Double-check it's not actually live by checking if scheduled time makes sense
-                $scheduledTime = strtotime($match->scheduled_time);
+                $checkedCount++;
+
+                $scheduledTime = strtotime($match->startTime);
                 $hoursPast = (time() - $scheduledTime) / 3600;
 
-                if ($hoursPast > $thresholdHours) {
-                    Log::info('Match finished - past scheduled time', [
+                // Calculate confidence score for removal
+                $confidence = 0;
+                $reasons = [];
+
+                // Base confidence for being past scheduled time
+                if ($hoursPast > 2) {
+                    $confidence += 20;
+                    $reasons[] = 'past_scheduled_time';
+                }
+
+                // Additional confidence if not updated recently
+                $hoursSinceUpdate = (time() - strtotime($match->lastUpdated)) / 3600;
+                if ($hoursSinceUpdate > 6) {
+                    $confidence += 15;
+                    $reasons[] = 'not_updated_recently';
+                }
+
+                // Additional confidence if available for betting but not live
+                if ($match->betting_availability === 'available_for_betting' && $match->live_status_id == 0) {
+                    $confidence += 10;
+                    $reasons[] = 'available_but_not_live';
+                }
+
+                // Remove if confidence is high enough
+                if ($confidence >= 30 || $this->aggressive) {
+                    Log::info('Match finished - time-based rules', [
                         'match_id' => $match->eventId,
                         'home_team' => $match->homeTeam,
                         'away_team' => $match->awayTeam,
-                        'scheduled_time' => $match->scheduled_time,
-                        'hours_past' => round($hoursPast, 1)
+                        'scheduled_time' => $match->startTime,
+                        'hours_past' => round($hoursPast, 1),
+                        'confidence' => $confidence,
+                        'reasons' => implode(', ', $reasons)
                     ]);
 
                     $match->delete();
@@ -285,6 +313,7 @@ class MatchStatusManager implements ShouldQueue
 
         return [
             'time_based_removed' => $removedCount,
+            'time_based_checked' => $checkedCount,
             'threshold_hours' => $thresholdHours
         ];
     }
