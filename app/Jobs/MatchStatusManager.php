@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Cache;
 use App\Services\ApiFootballService;
 use App\Services\PinnacleService;
 use App\Models\SportsMatch;
+use Illuminate\Support\Facades\DB;
 
 class MatchStatusManager implements ShouldQueue
 {
@@ -286,8 +287,10 @@ class MatchStatusManager implements ShouldQueue
                     $reasons[] = 'available_but_not_live';
                 }
 
-                // Remove if confidence is high enough
-                if ($confidence >= 30 || $this->aggressive) {
+                // Remove if confidence is high enough OR in aggressive mode with lower threshold
+                $shouldRemove = ($confidence >= 30) || ($this->aggressive && $confidence >= 15);
+
+                if ($shouldRemove) {
                     Log::info('Match finished - time-based rules', [
                         'match_id' => $match->eventId,
                         'home_team' => $match->homeTeam,
@@ -295,7 +298,8 @@ class MatchStatusManager implements ShouldQueue
                         'scheduled_time' => $match->startTime,
                         'hours_past' => round($hoursPast, 1),
                         'confidence' => $confidence,
-                        'reasons' => implode(', ', $reasons)
+                        'reasons' => implode(', ', $reasons),
+                        'aggressive_mode' => $this->aggressive
                     ]);
 
                     $match->delete();
@@ -421,7 +425,9 @@ class MatchStatusManager implements ShouldQueue
     private function removeMatchFromDatabase(string $homeTeam, string $awayTeam, string $reason): bool
     {
         try {
-            $match = SportsMatch::where('sportId', $this->sportId)
+            // Use direct database query since the table structure is non-standard
+            $match = DB::table('matches')
+                ->where('sportId', $this->sportId)
                 ->where(function($query) use ($homeTeam, $awayTeam) {
                     $query->where(function($q) use ($homeTeam, $awayTeam) {
                         $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
@@ -441,7 +447,8 @@ class MatchStatusManager implements ShouldQueue
                     'reason' => $reason
                 ]);
 
-                $match->delete();
+                // Use direct database delete since eventId is the primary key
+                DB::table('matches')->where('eventId', $match->eventId)->delete();
                 return true;
             }
 

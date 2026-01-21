@@ -275,7 +275,9 @@ class FinishedMatchManager extends Command
     private function removeMatchFromDatabase(string $homeTeam, string $awayTeam, int $sportId, string $reason): bool
     {
         try {
-            $match = SportsMatch::where('sportId', $sportId)
+            // Use direct database query since the table structure is non-standard
+            $match = DB::table('matches')
+                ->where('sportId', $sportId)
                 ->where(function($query) use ($homeTeam, $awayTeam) {
                     $query->where(function($q) use ($homeTeam, $awayTeam) {
                         $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
@@ -295,7 +297,8 @@ class FinishedMatchManager extends Command
                     'reason' => $reason
                 ]);
 
-                $match->delete();
+                // Use direct database delete since eventId is the primary key
+                DB::table('matches')->where('eventId', $match->eventId)->delete();
                 return true;
             }
 
