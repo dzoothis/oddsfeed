@@ -7,6 +7,7 @@ use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use App\Jobs\LiveMatchSyncJob;
 use App\Jobs\PrematchSyncJob;
 use App\Jobs\OddsSyncJob;
+use App\Jobs\MatchStatusManager;
 
 class Kernel extends ConsoleKernel
 {
@@ -50,6 +51,44 @@ class Kernel extends ConsoleKernel
             ->everyFiveMinutes()
             ->withoutOverlapping()
             ->name('system-health-check');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Multi-Layered Finished Match Detection
+        |--------------------------------------------------------------------------
+        | Layered approach ensures finished matches are removed before users see them
+        |--------------------------------------------------------------------------
+        */
+
+        // Layer 1: API-Football Status Detection (Primary - 60-70% Coverage)
+        // Runs every 5 minutes to catch finished matches from major leagues
+        $schedule->job(new MatchStatusManager('api_football_filter'))
+            ->everyFiveMinutes()
+            ->name('finished-match-api-football-filter');
+
+        // Layer 2: Pinnacle Market Verification (Secondary - 80-90% Coverage)
+        // Runs every 10 minutes to check if Pinnacle still offers betting markets
+        $schedule->job(new MatchStatusManager('pinnacle_verification'))
+            ->everyTenMinutes()
+            ->name('finished-match-pinnacle-verification');
+
+        // Layer 3: Time-Based Cleanup (Fallback - 95% Coverage)
+        // Runs hourly to remove matches significantly past their scheduled time
+        $schedule->job(new MatchStatusManager('time_based_cleanup'))
+            ->hourly()
+            ->name('finished-match-time-based-cleanup');
+
+        // Layer 4: Staleness Detection (Safety Net - 100% Coverage)
+        // Runs daily to remove completely stale matches
+        $schedule->job(new MatchStatusManager('stale_data_purge'))
+            ->daily()
+            ->name('finished-match-stale-data-purge');
+
+        // Comprehensive Check: All Layers Combined
+        // Runs every 30 minutes for thorough cleanup
+        $schedule->job(new MatchStatusManager('comprehensive_check'))
+            ->everyThirtyMinutes()
+            ->name('finished-match-comprehensive-check');
     }
 
     /**
