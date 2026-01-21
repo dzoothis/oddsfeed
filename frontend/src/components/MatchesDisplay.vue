@@ -112,13 +112,15 @@
               <div class="flex items-center justify-between">
                 <div class="match-meta flex items-center space-x-4 text-sm text-gray-600">
                   <span class="match-league font-medium text-gray-900">{{ match.league_name || match.league }}</span>
+                  <span v-if="match.betting_availability !== 'live' && match.scheduled_time && match.scheduled_time !== 'TBD'" class="match-datetime px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-lg font-semibold">
+                    {{ formatMatchDateTime(match) }}
+                  </span>
                   <span v-if="match.home_team_data?.country" class="match-country px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded">
                     {{ match.home_team_data.country }}
                   </span>
-                  <span v-if="match.duration && match.match_type === 'live'" class="match-duration px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded font-medium">
+                  <span v-if="match.duration && match.betting_availability === 'live'" class="match-duration px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded font-medium">
                     {{ match.duration }}
                   </span>
-                  <span v-if="match.match_type !== 'live'" class="match-time font-medium">{{ formatMatchTime(match) }}</span>
                 </div>
 
                 <div class="match-status-group flex items-center space-x-3">
@@ -677,9 +679,9 @@
     return `${Math.floor(diff / 86400)}d`;
   };
 
-  const formatMatchTime = (match) => {
+  const formatMatchDateTime = (match) => {
     // For live matches, don't show scheduled time
-    if (match.match_type === 'live') {
+    if (match.betting_availability === 'live') {
       return '';
     }
 
@@ -693,27 +695,24 @@
         const datePart = parts[0]; // "01/16/2026"
         const timePart = parts[1]; // "03:10:00"
 
-        // Convert to more readable format
-        const date = new Date(datePart + ' ' + timePart);
-        if (!isNaN(date.getTime())) {
-          const now = new Date();
-          const matchDate = new Date(date);
-
-          // If same day, just show time
-          if (matchDate.toDateString() === now.toDateString()) {
-            return timePart;
+        // Format as "Jan 16, 2026 03:10"
+        try {
+          const date = new Date(datePart + ' ' + timePart);
+          if (!isNaN(date.getTime())) {
+            return date.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            });
           }
-
-          // If today or tomorrow, show relative
-          const tomorrow = new Date(now);
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          if (matchDate.toDateString() === tomorrow.toDateString()) {
-            return `Tomorrow ${timePart}`;
-          }
-
-          // Otherwise show date and time
-          return `${datePart} ${timePart}`;
+        } catch (e) {
+          // Fallback to original format
         }
+
+        // Fallback: show as "MM/DD/YYYY HH:MM"
+        return `${datePart} ${timePart}`;
       }
     }
 

@@ -564,12 +564,17 @@ const loadAllMatchesForSport = async () => {
 
     allMatches.value = response.data.matches || []
 
-    // Sort matches: live first, then available for betting, then prematch, by date
+    // Sort matches: live first, then available for betting, then prematch/soft_finished, by date
     allMatches.value.sort((a, b) => {
-      const aPriority = a.betting_availability === 'live' ? 3 :
-        a.betting_availability === 'available_for_betting' ? 2 : 1
-      const bPriority = b.betting_availability === 'live' ? 3 :
-        b.betting_availability === 'available_for_betting' ? 2 : 1
+      const getPriority = (match) => {
+        if (match.betting_availability === 'live') return 4
+        if (match.betting_availability === 'available_for_betting') return 3
+        if (match.betting_availability === 'prematch') return 2
+        return 1 // soft_finished and others
+      }
+
+      const aPriority = getPriority(a)
+      const bPriority = getPriority(b)
 
       if (aPriority !== bPriority) return bPriority - aPriority
 

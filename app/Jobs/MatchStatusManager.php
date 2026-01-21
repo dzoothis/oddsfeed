@@ -123,12 +123,14 @@ class MatchStatusManager implements ShouldQueue
 
                         // Consider match finished if status indicates completion
                         if (in_array($status, ['FT', 'AET', 'PEN', 'AWD', 'Canc', 'PST'])) {
-                            $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
-                            $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
+                            $homeTeamNormalized = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
+                            $awayTeamNormalized = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
 
                             $finishedMatches[] = [
-                                'home_team' => $homeTeam,
-                                'away_team' => $awayTeam,
+                                'home_team' => $fixture['teams']['home']['name'] ?? '', // Store original name for database removal
+                                'away_team' => $fixture['teams']['away']['name'] ?? '', // Store original name for database removal
+                                'home_team_normalized' => $homeTeamNormalized, // For lookup purposes
+                                'away_team_normalized' => $awayTeamNormalized, // For lookup purposes
                                 'status' => $status,
                                 'date' => $date,
                                 'fixture' => $fixture

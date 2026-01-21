@@ -404,13 +404,24 @@ class LiveMatchSyncJob implements ShouldQueue
             $liveFixturesData = $apiFootballService->getFixtures(null, null, true);
             $liveFixtures = $liveFixturesData['response'] ?? [];
 
-            // Also fetch recently finished fixtures to filter out finished matches
-            $finishedFixturesData = $apiFootballService->getFinishedFixtures();
-            $finishedFixtures = $finishedFixturesData['response'] ?? [];
+            // Fetch recently finished fixtures from multiple dates to filter out finished matches
+            $finishedFixtures = [];
+            $datesToCheck = [
+                date('Y-m-d'), // Today
+                date('Y-m-d', strtotime('-1 day')), // Yesterday
+                date('Y-m-d', strtotime('-2 days')), // 2 days ago
+            ];
+
+            foreach ($datesToCheck as $date) {
+                $finishedFixturesData = $apiFootballService->getFinishedFixtures($date);
+                $dayFinishedFixtures = $finishedFixturesData['response'] ?? [];
+                $finishedFixtures = array_merge($finishedFixtures, $dayFinishedFixtures);
+            }
 
             Log::info('Fetched fixtures from API-Football', [
                 'live_fixtures_count' => count($liveFixtures),
-                'finished_fixtures_count' => count($finishedFixtures)
+                'finished_fixtures_count' => count($finishedFixtures),
+                'dates_checked' => $datesToCheck
             ]);
 
             // Create lookup for finished matches to filter them out
@@ -420,13 +431,15 @@ class LiveMatchSyncJob implements ShouldQueue
             foreach ($finishedFixtures as $fixture) {
                 $status = $fixture['fixture']['status']['short'] ?? '';
                 // Only consider truly finished matches (FT = Full Time, AET = After Extra Time, etc.)
-                if (in_array($status, ['FT', 'AET', 'PEN', 'AWD', 'AET', 'Canc'])) {
+                if (in_array($status, ['FT', 'AET', 'PEN', 'AWD', 'AET', 'Canc', 'PST'])) {
                     $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
                     $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
                     $key = $homeTeam . '|' . $awayTeam;
                     $finishedMatchesLookup[$key] = [
                         'fixture' => $fixture,
-                        'status' => $status
+                        'status' => $status,
+                        'original_home' => $fixture['teams']['home']['name'] ?? '',
+                        'original_away' => $fixture['teams']['away']['name'] ?? ''
                     ];
 
                     // Collect cache keys that need to be cleared for this sport
@@ -480,13 +493,36 @@ class LiveMatchSyncJob implements ShouldQueue
                 $awayTeam = $this->normalizeTeamName($pinnacleMatch['away'] ?? '');
                 $lookupKey = $homeTeam . '|' . $awayTeam;
 
+                // Try multiple variations of team name matching
+                $foundInFinished = false;
                 if (isset($finishedMatchesLookup[$lookupKey])) {
+                    $foundInFinished = true;
+                } else {
+                    // Try reverse order
+                    $reverseKey = $awayTeam . '|' . $homeTeam;
+                    if (isset($finishedMatchesLookup[$reverseKey])) {
+                        $foundInFinished = true;
+                        $lookupKey = $reverseKey;
+                    }
+                }
+
+                if ($foundInFinished) {
                     $finishedMatchesFiltered++;
-                    Log::debug('Filtered out finished match from live processing', [
+                    Log::info('Filtered out finished match from live processing', [
+                        'match_id' => $pinnacleMatch['event_id'] ?? 'unknown',
                         'home_team' => $pinnacleMatch['home'],
                         'away_team' => $pinnacleMatch['away'],
+                        'normalized_key' => $lookupKey,
                         'api_football_status' => $finishedMatchesLookup[$lookupKey]['status']
                     ]);
+
+                    // Remove from database as well
+                    $this->removeFinishedMatchFromDatabase(
+                        $finishedMatchesLookup[$lookupKey]['original_home'],
+                        $finishedMatchesLookup[$lookupKey]['original_away'],
+                        'live_sync_' . $finishedMatchesLookup[$lookupKey]['status']
+                    );
+
                     continue; // Skip this finished match
                 }
 
@@ -520,6 +556,12 @@ class LiveMatchSyncJob implements ShouldQueue
                 $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
                 $key = $homeTeam . '|' . $awayTeam;
                 $liveLookup[$key] = $fixture;
+
+                // Also try reverse order for better matching
+                $reverseKey = $awayTeam . '|' . $homeTeam;
+                if (!isset($liveLookup[$reverseKey])) {
+                    $liveLookup[$reverseKey] = $fixture;
+                }
             }
 
             // For prematch, we could fetch some upcoming fixtures, but for now focus on live
@@ -547,6 +589,23 @@ class LiveMatchSyncJob implements ShouldQueue
 
                 // Check if this Pinnacle match has a corresponding live fixture in API-Football
                 $apiFootballFixture = $liveLookup[$lookupKey] ?? null;
+
+                // If Pinnacle says it's live but API-Football doesn't show it as live, mark it as not actually live
+                if ($originalLiveStatusId === 1 && !$apiFootballFixture) {
+                    Log::info('Pinnacle claims live but API-Football shows no live fixture', [
+                        'match_id' => $pinnacleMatch['event_id'] ?? 'unknown',
+                        'home_team' => $pinnacleMatch['home'],
+                        'away_team' => $pinnacleMatch['away'],
+                        'lookup_key' => $lookupKey
+                    ]);
+
+                    // Mark as available for betting but not actually live
+                    $pinnacleMatch['live_status_id'] = 0;
+                    $pinnacleMatch['betting_availability'] = 'available_for_betting';
+                    $mergedMatches[] = $pinnacleMatch;
+                    $matchesAvailableForBetting++;
+                    continue;
+                }
 
                 if ($apiFootballFixture) {
                     // This match is ACTUALLY LIVE! Enhanced with API-Football data
@@ -850,6 +909,52 @@ class LiveMatchSyncJob implements ShouldQueue
                 'match_id' => $matchId,
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    /**
+     * Remove finished match from database
+     */
+    private function removeFinishedMatchFromDatabase(string $homeTeam, string $awayTeam, string $reason): bool
+    {
+        try {
+            // Use direct database query since the table structure is non-standard
+            $match = DB::table('matches')
+                ->where('sportId', $this->sportId ?? 1)
+                ->where(function($query) use ($homeTeam, $awayTeam) {
+                    $query->where(function($q) use ($homeTeam, $awayTeam) {
+                        $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
+                          ->where('awayTeam', 'like', '%' . $awayTeam . '%');
+                    })->orWhere(function($q) use ($homeTeam, $awayTeam) {
+                        $q->where('homeTeam', 'like', '%' . $awayTeam . '%')
+                          ->where('awayTeam', 'like', '%' . $homeTeam . '%');
+                    });
+                })
+                ->first();
+
+            if ($match) {
+                Log::info('Removing finished match from database (live sync)', [
+                    'match_id' => $match->eventId,
+                    'home_team' => $match->homeTeam,
+                    'away_team' => $match->awayTeam,
+                    'reason' => $reason
+                ]);
+
+                // Use direct database delete since eventId is the primary key
+                DB::table('matches')->where('eventId', $match->eventId)->delete();
+                return true;
+            }
+
+            return false;
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to remove finished match from database (live sync)', [
+                'home_team' => $homeTeam,
+                'away_team' => $awayTeam,
+                'reason' => $reason,
+                'error' => $e->getMessage()
+            ]);
+            return false;
         }
     }
 

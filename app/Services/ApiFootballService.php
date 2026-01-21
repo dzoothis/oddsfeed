@@ -53,13 +53,14 @@ class ApiFootballService
         $this->baseUrl = $baseUrl;
     }
 
-    public function getFixtures($league = null, $season = null, $live = false, $status = null)
+    public function getFixtures($league = null, $season = null, $live = false, $status = null, $date = null)
     {
         $params = [];
         if ($league) $params['league'] = $league;
         if ($season) $params['season'] = $season;
         if ($live) $params['live'] = 'all';
         if ($status) $params['status'] = $status;
+        if ($date) $params['date'] = $date;
 
         try {
             $response = $this->client->request('GET', $this->baseUrl . '/fixtures', [
@@ -75,7 +76,9 @@ class ApiFootballService
                 'league' => $league,
                 'season' => $season,
                 'live' => $live,
-                'status' => $response->getStatusCode(),
+                'status_param' => $status,
+                'date' => $date,
+                'response_status' => $response->getStatusCode(),
                 'fixtures_count' => isset($data['response']) ? count($data['response']) : 0
             ]);
 
@@ -109,7 +112,7 @@ class ApiFootballService
             $date = date('Y-m-d');
         }
 
-        return $this->getFixtures(null, null, false, 'FT');
+        return $this->getFixtures(null, null, false, 'FT', $date);
     }
 
     public function getEvents($fixtureId)

@@ -110,6 +110,7 @@ class SportsMatch extends Model
     public function markAsSoftFinished(): bool
     {
         $this->live_status_id = self::STATUS_SOFT_FINISHED;
+        $this->betting_availability = 'soft_finished'; // Mark as not available for betting
         $this->lastUpdated = now();
         return $this->save();
     }

@@ -246,19 +246,23 @@ class MatchesController extends Controller
                       ->where('betting_availability', '!=', 'available_for_betting');
             } elseif ($matchType === 'available_for_betting') {
                 // Available for betting: any matches where betting is currently available
-                $query->where('betting_availability', 'available_for_betting');
+                $query->where('betting_availability', 'available_for_betting')
+                      ->where('live_status_id', '!=', -1); // Exclude soft_finished matches
             }
             // 'all' type includes both prematch and live
 
-            // Exclude finished and soft_finished matches
-            // Only include: live matches OR matches with open betting markets that are not soft_finished
+            // First exclude finished and soft_finished matches completely
+            $query->where('live_status_id', '!=', -1) // Exclude soft_finished
+                  ->where('live_status_id', '!=', 2); // Exclude finished
+
+            // Then include live matches OR matches with open betting markets
             $query->where(function($q) {
                 $q->where('live_status_id', '>', 0) // Actively live matches
-                  ->where('live_status_id', '!=', -1); // Exclude soft_finished
-            })->orWhere(function($q) {
-                $q->where('hasOpenMarkets', true) // Have open betting markets
-                  ->where('live_status_id', '!=', -1); // But exclude soft_finished
+                  ->orWhere('hasOpenMarkets', true); // OR have open betting markets
             });
+
+            // Exclude matches that started more than 150 minutes ago (past expiration)
+            $query->whereRaw('startTime IS NULL OR startTime > DATE_SUB(NOW(), INTERVAL 150 MINUTE)');
 
             Log::debug('Matches query filters applied', [
                 'sportId' => $sportId,
@@ -484,6 +488,45 @@ class MatchesController extends Controller
         return $matches;
     }
 
+    /**
+     * Apply same visibility filters as database queries to prevent finished matches from leaking via cache
+     */
+    private function filterMatchesByVisibilityRules($matches)
+    {
+        return array_filter($matches, function($match) {
+            $liveStatusId = $match['live_status_id'] ?? 0;
+            $hasOpenMarkets = $match['has_open_markets'] ?? false;
+
+        // Exclude soft finished matches (live_status_id = -1)
+        if ($liveStatusId === -1) {
+            return false;
+        }
+
+        // Exclude finished matches (live_status_id = 2)
+        if ($liveStatusId === 2) {
+            return false;
+        }
+
+            // Exclude matches that started more than 150 minutes ago
+            if (isset($match['scheduled_time']) && $match['scheduled_time'] !== 'TBD') {
+                $scheduledTime = strtotime($match['scheduled_time']);
+                $currentTime = time();
+                $minutesElapsed = ($currentTime - $scheduledTime) / 60;
+
+                if ($minutesElapsed > 150) {
+                    return false;
+                }
+            }
+
+            // Exclude matches with no open markets
+            if (!$hasOpenMarkets) {
+                return false;
+            }
+
+            return true;
+        });
+    }
+
     private function getLiveMatchesFromCache($sportId, $leagueIds)
     {
         // If no specific leagues requested, return empty array (rely on database)
@@ -512,6 +555,9 @@ class MatchesController extends Controller
                 }
             }
         }
+
+        // Apply same visibility filters as database queries
+        $allLiveMatches = $this->filterMatchesByVisibilityRules($allLiveMatches);
 
         // Attach images to matches
         $allLiveMatches = $this->attachImagesToMatches($allLiveMatches);
@@ -544,6 +590,9 @@ class MatchesController extends Controller
                 }
             }
         }
+
+        // Apply same visibility filters as database queries
+        $staleMatches = $this->filterMatchesByVisibilityRules($staleMatches);
 
         // Attach images and odds to stale matches
         if (!empty($staleMatches)) {
@@ -583,6 +632,9 @@ class MatchesController extends Controller
                 }
             }
         }
+
+        // Apply same visibility filters as database queries
+        $allPrematchMatches = $this->filterMatchesByVisibilityRules($allPrematchMatches);
 
         // Attach images to matches
         $allPrematchMatches = $this->attachImagesToMatches($allPrematchMatches);
