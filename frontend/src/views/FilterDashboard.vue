@@ -773,7 +773,7 @@ const manualRefresh = async () => {
 
     // Reload matches after a short delay
     setTimeout(() => {
-      loadMatches()
+      loadAllMatchesForSport()
     }, 2000)
 
   } catch (error) {
