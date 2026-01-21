@@ -33,8 +33,8 @@ class MatchesController extends Controller
             $matchType = $request->input('match_type', 'all'); // 'live', 'prematch', or 'all'
 
             // Validate match_type parameter
-            if (!in_array($matchType, ['live', 'prematch', 'all'])) {
-                return response()->json(['error' => 'match_type must be one of: live, prematch, all'], 400);
+            if (!in_array($matchType, ['live', 'prematch', 'available_for_betting', 'all'])) {
+                return response()->json(['error' => 'match_type must be one of: live, prematch, available_for_betting, all'], 400);
             }
 
             if (!$sportId) {
@@ -241,9 +241,14 @@ class MatchesController extends Controller
                 $query->where('eventType', 'live')
                       ->where('live_status_id', '>', 0);
             } elseif ($matchType === 'prematch') {
-                $query->where('eventType', 'prematch');
+                // Prematch: future matches that are NOT available for betting
+                $query->where('eventType', 'prematch')
+                      ->where('betting_availability', '!=', 'available_for_betting');
+            } elseif ($matchType === 'available_for_betting') {
+                // Available for betting: any matches where betting is currently available
+                $query->where('betting_availability', 'available_for_betting');
             }
-            // 'all' type includes both
+            // 'all' type includes both prematch and live
 
             // Exclude finished matches (matches that are not live and have no open markets)
             $query->where(function($q) {

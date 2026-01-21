@@ -111,7 +111,7 @@
             <button @click="setMatchTypeFilter('prematch')"
               :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
                 matchTypeFilter === 'prematch' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
-              Pre-match ({{ upcomingMatchesCount }})
+              Prematch (No Betting) ({{ upcomingMatchesCount }})
             </button>
             <button @click="setMatchTypeFilter('all')"
               :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
@@ -466,13 +466,8 @@ const filteredMatches = computed(() => {
   let matches = [...allMatches.value]
 
   // Filter by match type
-  if (matchTypeFilter.value !== 'all') {
-    if (matchTypeFilter.value === 'available_for_betting') {
-      matches = matches.filter(match => match.betting_availability === 'available_for_betting')
-    } else {
-      matches = matches.filter(match => match.betting_availability === matchTypeFilter.value)
-    }
-  }
+  // Match type filtering is now handled by backend API
+  // No client-side filtering needed for match types
 
   // Filter by search term
   if (matchSearchTerm.value.trim()) {
