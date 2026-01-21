@@ -4,6 +4,9 @@ namespace App\Jobs;
 
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Services\OddsApiIntegrationService;
@@ -11,7 +14,7 @@ use App\Models\SportsMatch;
 
 class OddsSyncJob implements ShouldQueue
 {
-    use Queueable;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     // Queue configuration for odds processing - optimized for stability
     public $tries = 2; // Reduced retries to prevent retry loops

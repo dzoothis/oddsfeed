@@ -4,6 +4,9 @@ namespace App\Jobs;
 
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Services\PinnacleService;
@@ -12,7 +15,7 @@ use App\Models\SportsMatch;
 
 class PrematchSyncJob implements ShouldQueue
 {
-    use Queueable;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     // Queue configuration for data synchronization with chunked processing
     public $tries = 3; // Retry up to 3 times for network/API failures

@@ -2,8 +2,11 @@
 
 namespace App\Jobs;
 
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Services\PinnacleService;
@@ -13,7 +16,7 @@ use App\Models\SportsMatch;
 
 class LiveMatchSyncJob implements ShouldQueue
 {
-    use Queueable;
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     // Queue configuration for live match synchronization
     public $tries = 3; // Retry up to 3 times for network/API failures
