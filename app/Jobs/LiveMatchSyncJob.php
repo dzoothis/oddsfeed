@@ -13,6 +13,7 @@ use App\Services\PinnacleService;
 use App\Services\TeamResolutionService;
 use App\Services\ApiFootballService;
 use App\Models\SportsMatch;
+use Illuminate\Support\Facades\DB;
 
 class LiveMatchSyncJob implements ShouldQueue
 {
