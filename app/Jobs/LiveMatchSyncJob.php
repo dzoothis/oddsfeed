@@ -18,7 +18,6 @@ class LiveMatchSyncJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public string $queue = 'live-sync';
     // Queue configuration for live match synchronization
     public $tries = 3; // Retry up to 3 times for network/API failures
     public $timeout = 600; // 10 minutes timeout for live data operations
@@ -36,6 +35,7 @@ class LiveMatchSyncJob implements ShouldQueue
     {
         $this->sportId = $sportId;
         $this->leagueIds = $leagueIds;
+        $this->onQueue('live-sync');
     }
 
     /**
