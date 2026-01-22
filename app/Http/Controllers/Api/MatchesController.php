@@ -605,6 +605,60 @@ class MatchesController extends Controller
         });
     }
 
+    /**
+     * Filter out stale or finished prematch matches from cache
+     * Defensive filter to prevent outdated data from being served
+     */
+    private function filterStalePrematchMatches($matches)
+    {
+        $twoHoursAgo = now()->subMinutes(120);
+
+        return array_filter($matches, function($match) use ($twoHoursAgo) {
+            // Check status field
+            $status = $match['status'] ?? $match['eventType'] ?? null;
+            if ($status === 'finished') {
+                Log::debug('Discarded cached prematch match - finished status', [
+                    'match_id' => $match['id'] ?? 'unknown',
+                    'status' => $status
+                ]);
+                return false;
+            }
+
+            // Check startTime (already filtered by filterMatchesByVisibilityRules for live_status_id = 2)
+            if (isset($match['startTime'])) {
+                try {
+                    // Parse startTime - handle different formats
+                    $startTime = null;
+                    if (is_string($match['startTime'])) {
+                        $startTime = \Carbon\Carbon::parse($match['startTime']);
+                    } elseif ($match['startTime'] instanceof \Carbon\Carbon) {
+                        $startTime = $match['startTime'];
+                    }
+
+                    if ($startTime && $startTime < $twoHoursAgo) {
+                        Log::debug('Discarded cached prematch match - too old', [
+                            'match_id' => $match['id'] ?? 'unknown',
+                            'startTime' => $startTime->toDateTimeString(),
+                            'twoHoursAgo' => $twoHoursAgo->toDateTimeString(),
+                            'age_minutes' => $twoHoursAgo->diffInMinutes($startTime)
+                        ]);
+                        return false;
+                    }
+                } catch (\Exception $e) {
+                    Log::warning('Failed to parse startTime in cached match', [
+                        'match_id' => $match['id'] ?? 'unknown',
+                        'startTime' => $match['startTime'],
+                        'error' => $e->getMessage()
+                    ]);
+                    // If we can't parse the time, discard the match to be safe
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }
+
     private function getLiveMatchesFromCache($sportId, $leagueIds)
     {
         if (empty($leagueIds)) {
@@ -705,6 +759,9 @@ class MatchesController extends Controller
         }
 
         $allPrematchMatches = $this->filterMatchesByVisibilityRules($allPrematchMatches);
+
+        // Additional defensive filtering for cached prematch matches
+        $allPrematchMatches = $this->filterStalePrematchMatches($allPrematchMatches);
 
         $allPrematchMatches = $this->attachImagesToMatches($allPrematchMatches);
 
