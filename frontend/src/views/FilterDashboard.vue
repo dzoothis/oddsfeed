@@ -33,6 +33,9 @@
             <div>
               <h1 class="text-2xl font-bold text-gray-900">Sports Feed</h1>
               <p class="text-sm text-gray-600 mt-1">Filter by Sport and League to view live odds</p>
+              <p class="text-xs text-blue-600 mt-1">
+                🌍 Times shown in {{ userTimezoneDisplay }}
+              </p>
             </div>
             <div class="flex gap-3">
               <button @click="openLeaguesModal"
@@ -412,6 +415,9 @@ import Swal from 'sweetalert2'
 const isAuthenticated = ref(localStorage.getItem('isAuthenticated') === 'true')
 const password = ref('')
 
+// Timezone detection
+const userTimezone = ref('UTC')
+
 // Data
 const sports = ref([])
 const selectedSport = ref(null)
@@ -449,6 +455,18 @@ const leaguesModalTrigger = ref(0)
 const isRefreshing = ref(false)
 
 // Computed properties
+const userTimezoneDisplay = computed(() => {
+  const timezoneNames = {
+    'America/New_York': 'Eastern Time',
+    'Europe/London': 'London Time',
+    'Asia/Kolkata': 'IST',
+    'Asia/Shanghai': 'CST',
+    'Australia/Sydney': 'Sydney Time',
+    'UTC': 'UTC'
+  };
+  return timezoneNames[userTimezone.value] || userTimezone.value;
+})
+
 const liveMatchesCount = computed(() =>
   allMatches.value.filter(match => match.betting_availability === 'live').length
 )
@@ -558,8 +576,11 @@ const loadAllMatchesForSport = async () => {
   loadingMatches.value = true
   pageLoading.value = true
   try {
+    console.log('🌍 Using timezone for API call:', userTimezone.value)
+
     const response = await http.post(API_ENDPOINTS.MATCHES, {
-      sport_id: selectedSport.value.pinnacleId || selectedSport.value.id
+      sport_id: selectedSport.value.pinnacleId || selectedSport.value.id,
+      timezone: userTimezone.value  // Send detected timezone to backend
     })
 
     allMatches.value = response.data.matches || []
@@ -762,6 +783,9 @@ const manualRefresh = async () => {
 
     console.log('Triggering sport-specific manual refresh:', refreshData)
 
+    // Include timezone in manual refresh
+    refreshData.timezone = userTimezone.value
+
     const response = await http.post(API_ENDPOINTS.MATCHES_REFRESH, refreshData)
 
     console.log('Manual refresh response:', response.data)
@@ -797,6 +821,11 @@ const manualRefresh = async () => {
 // Lifecycle
 onMounted(() => {
   if (isAuthenticated.value) {
+    const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    userTimezone.value = detectedTimezone
+
+    console.log('🌍 Timezone detected on page load:', detectedTimezone)
+
     fetchSports()
   }
 })

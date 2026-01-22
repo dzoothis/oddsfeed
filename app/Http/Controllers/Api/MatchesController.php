@@ -30,9 +30,14 @@ class MatchesController extends Controller
         try {
             $leagueIds = $request->input('league_ids', []);
             $sportId = $request->input('sport_id');
-            $matchType = $request->input('match_type', 'all'); // 'live', 'prematch', or 'all'
+            $matchType = $request->input('match_type', 'all');
+            $timezone = $request->input('timezone', 'UTC'); // Default to UTC if not provided
 
-            // Validate match_type parameter
+            // Validate required parameters
+            if (!$sportId) {
+                return response()->json(['error' => 'sport_id is required'], 400);
+            }
+
             if (!in_array($matchType, ['live', 'prematch', 'available_for_betting', 'all'])) {
                 return response()->json(['error' => 'match_type must be one of: live, prematch, available_for_betting, all'], 400);
             }
@@ -41,33 +46,28 @@ class MatchesController extends Controller
                 return response()->json(['error' => 'sport_id is required'], 400);
             }
 
-            // league_ids is now optional - if empty, return all matches for the sport
-
             Log::info('Serving matches with database-first strategy', [
                 'sportId' => $sportId,
                 'leagueIds' => $leagueIds,
                 'matchType' => $matchType
             ]);
 
-            // Database-first approach: Always try database first for immediate data
-            $matches = $this->getMatchesFromDatabase($sportId, $leagueIds, $matchType);
+            $matches = $this->getMatchesFromDatabase($sportId, $leagueIds, $matchType, $timezone);
 
             if (!empty($matches)) {
-                // We have database data - enrich with cache and odds
                 Log::info('Serving matches from database', [
                     'sportId' => $sportId,
                     'matchType' => $matchType,
+                    'timezone' => $timezone,
                     'match_count' => count($matches)
                 ]);
 
                 try {
-                    // Convert Pinnacle IDs to database IDs for enrichment methods
                     $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
 
-                    $matches = $this->enrichMatchesWithCacheData($matches, $sportId, $databaseLeagueIds, $matchType);
+                    $matches = $this->attachImagesToMatches($matches);
                     $matches = $this->attachOddsFromCache($matches);
 
-                    // Check if database data might be stale and trigger background refresh
                     $this->triggerBackgroundRefreshIfNeeded($sportId, $databaseLeagueIds, $matchType, $matches);
                 } catch (\Exception $e) {
                     Log::warning('Match enrichment failed, returning raw matches', [
@@ -76,7 +76,6 @@ class MatchesController extends Controller
                         'leagueIds' => $leagueIds,
                         'matchCount' => count($matches)
                     ]);
-                    // Continue with raw matches if enrichment fails
                 }
 
                 $response = [
@@ -87,30 +86,27 @@ class MatchesController extends Controller
                     'filters' => [
                         'sport_id' => $sportId,
                         'league_ids' => $leagueIds,
-                        'match_type' => $matchType
+                        'match_type' => $matchType,
+                        'timezone' => $timezone
                     ]
                 ];
 
-                // Add health status to response
                 $healthStatus = $this->checkSystemHealth();
                 $response = $this->addHealthStatusToResponse($response, $healthStatus);
 
-                return response()->json($response)->header('Cache-Control', 'private, max-age=30'); // 30s cache for database data
+                return response()->json($response)->header('Cache-Control', 'private, max-age=30');
             }
 
-            // No database data - try cache as fallback
             Log::info('No database data found, trying cache fallback', [
                 'sportId' => $sportId,
                 'matchType' => $matchType
             ]);
 
-            // Convert Pinnacle IDs to database IDs for cache methods too
             $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
 
-            $matches = $this->getMatchesFromCache($sportId, $databaseLeagueIds, $matchType);
+            $matches = $this->getMatchesFromCache($sportId, $databaseLeagueIds, $matchType, $timezone);
 
             if (!empty($matches)) {
-                // Cache hit - serve cached data
                 Log::info('Serving matches from cache fallback', [
                     'sportId' => $sportId,
                     'matchType' => $matchType,
@@ -119,7 +115,6 @@ class MatchesController extends Controller
 
                 $matches = $this->attachOddsFromCache($matches);
 
-                // Trigger background sync to refresh cache
                 $this->triggerBackgroundSync($sportId, $databaseLeagueIds, $matchType);
 
                 $response = [
@@ -131,18 +126,17 @@ class MatchesController extends Controller
                     'filters' => [
                         'sport_id' => $sportId,
                         'league_ids' => $leagueIds,
-                        'match_type' => $matchType
+                        'match_type' => $matchType,
+                        'timezone' => $timezone
                     ]
                 ];
 
-                // Add health status to response
                 $healthStatus = $this->checkSystemHealth();
                 $response = $this->addHealthStatusToResponse($response, $healthStatus);
 
-                return response()->json($response)->header('Cache-Control', 'private, max-age=10'); // Shorter cache for stale data
+                return response()->json($response)->header('Cache-Control', 'private, max-age=10');
             }
 
-            // No data anywhere - trigger sync and return minimal response
             Log::info('No data available - triggering background sync', [
                 'sportId' => $sportId,
                 'leagueIds' => $leagueIds,
@@ -164,11 +158,10 @@ class MatchesController extends Controller
                 ]
             ];
 
-            // Add health status to response
             $healthStatus = $this->checkSystemHealth();
             $response = $this->addHealthStatusToResponse($response, $healthStatus);
 
-            return response()->json($response)->header('Cache-Control', 'private, max-age=5'); // Very short cache for empty state
+            return response()->json($response)->header('Cache-Control', 'private, max-age=5');
 
         } catch (\Exception $e) {
             Log::error('Error serving cached matches', [
@@ -179,7 +172,6 @@ class MatchesController extends Controller
                 'trace' => $e->getTraceAsString()
             ]);
 
-            // Try to serve stale data as fallback when everything fails
             try {
                 $staleMatches = $this->getStaleMatchesAsFallback($sportId, $leagueIds, $matchType);
                 if (!empty($staleMatches)) {
@@ -199,7 +191,7 @@ class MatchesController extends Controller
                             'league_ids' => $leagueIds,
                             'match_type' => $matchType
                         ]
-                    ])->header('Cache-Control', 'private, max-age=30'); // Allow 30s cache for stale data
+                    ])->header('Cache-Control', 'private, max-age=30');
                 }
             } catch (\Exception $fallbackError) {
                 Log::error('Stale data fallback also failed', [
@@ -211,58 +203,58 @@ class MatchesController extends Controller
             return response()->json([
                 'error' => 'Service temporarily unavailable',
                 'message' => 'Unable to retrieve match data at this time'
-            ], 503); // Service Unavailable
+            ], 503);
         }
     }
 
     /**
-     * Phase 2: Get matches from cache instead of API calls
-     */
-    /**
      * Get matches from database first (authoritative source)
      */
-    private function getMatchesFromDatabase($sportId, $leagueIds, $matchType)
+    private function getMatchesFromDatabase($sportId, $leagueIds, $matchType, $timezone = 'UTC')
     {
         try {
-            $query = SportsMatch::with('league') // Eager load league relationship
+
+            $query = SportsMatch::with('league')
                 ->where('sportId', $sportId)
-                ->where('lastUpdated', '>', now()->subHours(24)) // Only recent matches
+                ->where('lastUpdated', '>', now()->subHours(24))
                 ->orderBy('startTime', 'asc');
 
-            // Only filter by leagues if leagueIds is provided and not empty
             if (!empty($leagueIds)) {
-                // Convert Pinnacle IDs to database IDs if needed
                 $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
                 $query->whereIn('leagueId', $databaseLeagueIds);
             }
 
-            // Filter by match type
             if ($matchType === 'live') {
-                $query->where('eventType', 'live')
-                      ->where('live_status_id', '>', 0);
+                $query->where('startTime', '<=', \Carbon\Carbon::now())
+                      ->where('startTime', '!=', null)
+                      ->where(function($q) {
+                          $q->where('live_status_id', '>', 0)
+                            ->orWhere('home_score', '>', 0)
+                            ->orWhere('away_score', '>', 0);
+                      });
             } elseif ($matchType === 'prematch') {
-                // Prematch: future matches that are NOT available for betting
                 $query->where('eventType', 'prematch')
                       ->where('betting_availability', '!=', 'available_for_betting');
             } elseif ($matchType === 'available_for_betting') {
-                // Available for betting: any matches where betting is currently available
                 $query->where('betting_availability', 'available_for_betting')
-                      ->where('live_status_id', '!=', -1); // Exclude soft_finished matches
+                      ->where('live_status_id', '!=', -1)
+                      ->where('live_status_id', '=', 0)
+                      ->where('startTime', '>', \Carbon\Carbon::now());
             }
-            // 'all' type includes both prematch and live
 
-            // First exclude finished and soft_finished matches completely
-            $query->where('live_status_id', '!=', -1) // Exclude soft_finished
-                  ->where('live_status_id', '!=', 2); // Exclude finished
+            $query->where('live_status_id', '!=', -1)
+                  ->where('live_status_id', '!=', 2);
 
-            // Then include live matches OR matches with open betting markets
-            $query->where(function($q) {
-                $q->where('live_status_id', '>', 0) // Actively live matches
-                  ->orWhere('hasOpenMarkets', true); // OR have open betting markets
-            });
+            if ($matchType === 'all') {
+                $query->where(function($q) {
+                    $q->where('live_status_id', '>', 0)
+                      ->orWhere('hasOpenMarkets', true);
+                });
+            }
 
-            // Exclude matches that started more than 150 minutes ago (past expiration)
-            $query->whereRaw('startTime IS NULL OR startTime > DATE_SUB(NOW(), INTERVAL 150 MINUTE)');
+            if ($matchType !== 'live') {
+                $query->whereRaw('(startTime IS NULL OR startTime > DATE_SUB(NOW(), INTERVAL 150 MINUTE))');
+            }
 
             Log::debug('Matches query filters applied', [
                 'sportId' => $sportId,
@@ -274,8 +266,7 @@ class MatchesController extends Controller
             $matches = $query->get();
 
             if ($matches->isNotEmpty()) {
-                // Convert to API format and enrich
-                $matches = $this->formatMatchesForApi($matches);
+                $matches = $this->formatMatchesForApi($matches, $timezone);
                 return $matches;
             }
 
@@ -292,20 +283,9 @@ class MatchesController extends Controller
     }
 
     /**
-     * Enrich database matches with additional cache data (images, etc.)
-     */
-    private function enrichMatchesWithCacheData($matches, $sportId, $leagueIds, $matchType)
-    {
-        // For now, just attach images (could be expanded to include other cache data)
-        return $this->attachImagesToMatches($matches);
-    }
-
-    /**
-     * Trigger background refresh only if data might be stale
      */
     private function triggerBackgroundRefreshIfNeeded($sportId, $leagueIds, $matchType, $matches)
     {
-        // Check if any matches are older than 30 minutes
         $oldestMatch = collect($matches)->sortBy('last_updated')->first();
 
         if ($oldestMatch && isset($oldestMatch['last_updated'])) {
@@ -322,7 +302,6 @@ class MatchesController extends Controller
                 $this->triggerBackgroundSync($sportId, $leagueIds, $matchType);
             }
         } else {
-            // No timestamp data, trigger refresh to be safe
             Log::info('No timestamp data in matches, triggering background refresh', [
                 'sportId' => $sportId
             ]);
@@ -334,15 +313,15 @@ class MatchesController extends Controller
     /**
      * Format database matches for API response
      */
-    private function formatMatchesForApi($databaseMatches)
+    private function formatMatchesForApi($databaseMatches, $timezone = 'UTC')
     {
-        // Ensure we have a collection
         if (is_array($databaseMatches)) {
             $databaseMatches = collect($databaseMatches);
         }
 
-        return $databaseMatches->map(function($match) {
-            // Convert database model to API format
+        return $databaseMatches->map(function($match) use ($timezone) {
+            $isLiveVisible = $this->isLiveVisible($match);
+
             return [
                 'id' => $match->eventId,
                 'sport_id' => $match->sportId,
@@ -352,19 +331,19 @@ class MatchesController extends Controller
                 'away_team_id' => $match->away_team_id,
                 'league_id' => $match->leagueId,
                 'league_name' => $match->league ? $match->league->name : 'League ' . $match->leagueId,
-                'scheduled_time' => $match->startTime ? $match->startTime->format('m/d/Y, H:i:s') : 'TBD',
+                'scheduled_time' => $match->startTime ? $match->startTime->setTimezone($timezone ?: 'UTC')->format('m/d/Y, h:i A T') : 'TBD',
                 'match_type' => $match->match_type ?? $match->eventType,
-                'betting_availability' => $match->betting_availability ?? 'prematch',
+                'betting_availability' => $isLiveVisible ? 'live' : ($match->betting_availability ?? 'prematch'),
                 'live_status_id' => $match->live_status_id ?? 0,
                 'has_open_markets' => $match->hasOpenMarkets ?? false,
                 'score' => [
-                    'home' => $match->home_score ?? 0,
-                    'away' => $match->away_score ?? 0
+                    'home' => ($match->home_score > 0) ? $match->home_score : null,
+                    'away' => ($match->away_score > 0) ? $match->away_score : null
                 ],
-                'duration' => $match->match_duration ?? null,
-                'odds_count' => 0, // Will be filled by attachOddsFromCache
+                'duration' => $isLiveVisible ? $match->match_duration : null,
+                'odds_count' => 0,
                 'images' => [
-                    'home_team_logo' => null, // Will be filled by attachImagesToMatches
+                    'home_team_logo' => null,
                     'away_team_logo' => null,
                     'league_logo' => null,
                     'country_flag' => null
@@ -393,7 +372,6 @@ class MatchesController extends Controller
         ];
 
         try {
-            // Check Redis connectivity
             try {
                 \Illuminate\Support\Facades\Redis::connection()->ping();
             } catch (\Exception $e) {
@@ -402,7 +380,6 @@ class MatchesController extends Controller
                 Log::warning('System health: Cache unavailable', ['error' => $e->getMessage()]);
             }
 
-            // Check for recent failed jobs
             $recentFailures = DB::table('failed_jobs')
                 ->where('failed_at', '>', now()->subHours(1))
                 ->count();
@@ -413,7 +390,6 @@ class MatchesController extends Controller
                 Log::warning('System health: High job failure rate', ['failures' => $recentFailures]);
             }
 
-            // Check data freshness
             $staleMatches = DB::table('matches')
                 ->where('lastUpdated', '<', now()->subHours(6))
                 ->count();
@@ -449,7 +425,6 @@ class MatchesController extends Controller
             $response['system_status'] = 'degraded';
             $response['warnings'] = $healthStatus['warnings'];
 
-            // Add user-friendly message
             if (empty($response['matches'])) {
                 $response['message'] = 'Service temporarily experiencing issues - showing available data';
             }
@@ -460,32 +435,145 @@ class MatchesController extends Controller
         return $response;
     }
 
-    private function getMatchesFromCache($sportId, $leagueIds, $matchType)
+    private function getMatchesFromCache($sportId, $leagueIds, $matchType, $timezone = 'UTC')
     {
         $matches = [];
 
         if ($matchType === 'all' || $matchType === 'live') {
-            // Get live matches from cache
             $liveMatches = $this->getLiveMatchesFromCache($sportId, $leagueIds);
             $matches = array_merge($matches, $liveMatches);
         }
 
         if ($matchType === 'all' || $matchType === 'prematch') {
-            // Get prematch matches from cache
             $prematchMatches = $this->getPrematchMatchesFromCache($sportId, $leagueIds);
             $matches = array_merge($matches, $prematchMatches);
         }
 
-        // Handle 'available_for_betting' filter by post‑filtering cached matches
         if ($matchType === 'available_for_betting') {
             $matches = array_filter($matches, function ($m) {
                 return (isset($m['betting_availability']) && $m['betting_availability'] === 'available_for_betting');
             });
-            // Re‑index array to ensure JSON encoding produces a proper list
             $matches = array_values($matches);
         }
 
         return $matches;
+    }
+
+    /**
+     * Authoritative helper to determine if a match should be visible as LIVE
+     * Returns true ONLY when:
+     * - startTime is NOT NULL
+     * - startTime <= current time (match has started)
+     * - live_status_id > 0 OR API-Football score exists (home_score > 0 OR away_score > 0)
+     */
+    private function isLiveVisible($match): bool
+    {
+        if (!isset($match['startTime']) && !isset($match->startTime)) {
+            return false;
+        }
+
+        $startTime = isset($match['startTime']) ? $match['startTime'] : $match->startTime;
+
+        if (is_string($startTime)) {
+            $startTime = \Carbon\Carbon::parse($startTime);
+        }
+
+        $now = \Carbon\Carbon::now();
+        if ($startTime > $now) {
+            Log::debug('Match excluded from live visibility - future start time', [
+                'match_id' => isset($match['id']) ? $match['id'] : (isset($match->eventId) ? $match->eventId : 'unknown'),
+                'startTime' => $startTime->toDateTimeString(),
+                'current_time' => $now->toDateTimeString()
+            ]);
+            return false;
+        }
+
+        $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
+        $homeScore = isset($match['home_score']) ? $match['home_score'] : (isset($match->home_score) ? $match->home_score : 0);
+        $awayScore = isset($match['away_score']) ? $match['away_score'] : (isset($match->away_score) ? $match->away_score : 0);
+
+        $hasPinnacleLive = $liveStatusId > 0;
+        $hasApiFootballLive = ($homeScore > 0 || $awayScore > 0);
+
+        return $hasPinnacleLive || $hasApiFootballLive;
+    }
+
+    /**
+     * Detect user's timezone from request
+     * Priority: 1) Explicit timezone param, 2) X-Timezone header, 3) Accept-Language fallback, 4) UTC
+     */
+    private function detectUserTimezone(Request $request): string
+    {
+        // Check explicit timezone parameter
+        $timezone = $request->input('timezone');
+        if ($timezone && $this->isValidTimezone($timezone)) {
+            return $timezone;
+        }
+
+        // Check X-Timezone header (can be set by frontend)
+        $headerTimezone = $request->header('X-Timezone');
+        if ($headerTimezone && $this->isValidTimezone($headerTimezone)) {
+            return $headerTimezone;
+        }
+
+        // Check Accept-Language for basic region detection (fallback)
+        $acceptLanguage = $request->header('Accept-Language');
+        if ($acceptLanguage) {
+            $timezone = $this->timezoneFromAcceptLanguage($acceptLanguage);
+            if ($timezone) {
+                return $timezone;
+            }
+        }
+
+        // Default to UTC
+        return 'UTC';
+    }
+
+    /**
+     * Validate timezone identifier
+     */
+    private function isValidTimezone(string $timezone): bool
+    {
+        try {
+            new DateTimeZone($timezone);
+            return true;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Basic timezone detection from Accept-Language header
+     * This is a simple fallback - real implementation would use IP geolocation
+     */
+    private function timezoneFromAcceptLanguage(string $acceptLanguage): ?string
+    {
+        // Extract primary language tag (e.g., "en-US" -> "US")
+        $parts = explode('-', explode(',', $acceptLanguage)[0]);
+        if (count($parts) >= 2) {
+            $region = strtoupper($parts[1]);
+
+            // Basic region to timezone mapping
+            $regionMap = [
+                'US' => 'America/New_York',    // Eastern Time
+                'GB' => 'Europe/London',       // GMT/BST
+                'IN' => 'Asia/Kolkata',        // IST
+                'CN' => 'Asia/Shanghai',       // CST
+                'JP' => 'Asia/Tokyo',          // JST
+                'AU' => 'Australia/Sydney',    // AEST/AEDT
+                'DE' => 'Europe/Berlin',       // CET/CEST
+                'FR' => 'Europe/Paris',        // CET/CEST
+                'IT' => 'Europe/Rome',         // CET/CEST
+                'ES' => 'Europe/Madrid',       // CET/CEST
+                'BR' => 'America/Sao_Paulo',   // BRT/BRST
+                'MX' => 'America/Mexico_City', // CST/CDT
+                'CA' => 'America/Toronto',     // EST/EDT
+            ];
+
+            return $regionMap[$region] ?? null;
+        }
+
+        return null;
     }
 
     /**
@@ -494,31 +582,21 @@ class MatchesController extends Controller
     private function filterMatchesByVisibilityRules($matches)
     {
         return array_filter($matches, function($match) {
-            $liveStatusId = $match['live_status_id'] ?? 0;
-            $hasOpenMarkets = $match['has_open_markets'] ?? false;
-
-        // Exclude soft finished matches (live_status_id = -1)
-        if ($liveStatusId === -1) {
-            return false;
-        }
-
-        // Exclude finished matches (live_status_id = 2)
-        if ($liveStatusId === 2) {
-            return false;
-        }
-
-            // Exclude matches that started more than 150 minutes ago
-            if (isset($match['scheduled_time']) && $match['scheduled_time'] !== 'TBD') {
-                $scheduledTime = strtotime($match['scheduled_time']);
-                $currentTime = time();
-                $minutesElapsed = ($currentTime - $scheduledTime) / 60;
-
-                if ($minutesElapsed > 150) {
-                    return false;
-                }
+            if (!$this->isLiveVisible($match)) {
+                return false;
             }
 
-            // Exclude matches with no open markets
+            $liveStatusId = $match['live_status_id'] ?? 0;
+
+            if ($liveStatusId === -1) {
+                return false;
+            }
+
+            if ($liveStatusId === 2) {
+                return false;
+            }
+
+            $hasOpenMarkets = $match['has_open_markets'] ?? false;
             if (!$hasOpenMarkets) {
                 return false;
             }
@@ -529,7 +607,6 @@ class MatchesController extends Controller
 
     private function getLiveMatchesFromCache($sportId, $leagueIds)
     {
-        // If no specific leagues requested, return empty array (rely on database)
         if (empty($leagueIds)) {
             return [];
         }
@@ -543,7 +620,6 @@ class MatchesController extends Controller
             if ($leagueMatches) {
                 $allLiveMatches = array_merge($allLiveMatches, $leagueMatches);
             } else {
-                // Try stale cache as fallback
                 $staleCacheKey = "live_matches_stale:{$sportId}:{$leagueId}";
                 $staleMatches = Cache::get($staleCacheKey);
                 if ($staleMatches) {
@@ -556,10 +632,8 @@ class MatchesController extends Controller
             }
         }
 
-        // Apply same visibility filters as database queries
         $allLiveMatches = $this->filterMatchesByVisibilityRules($allLiveMatches);
 
-        // Attach images to matches
         $allLiveMatches = $this->attachImagesToMatches($allLiveMatches);
 
         return $allLiveMatches;
@@ -594,7 +668,6 @@ class MatchesController extends Controller
         // Apply same visibility filters as database queries
         $staleMatches = $this->filterMatchesByVisibilityRules($staleMatches);
 
-        // Attach images and odds to stale matches
         if (!empty($staleMatches)) {
             $staleMatches = $this->attachImagesToMatches($staleMatches);
             $staleMatches = $this->attachOddsFromCache($staleMatches);
@@ -605,7 +678,6 @@ class MatchesController extends Controller
 
     private function getPrematchMatchesFromCache($sportId, $leagueIds)
     {
-        // If no specific leagues requested, return empty array (rely on database)
         if (empty($leagueIds)) {
             return [];
         }
@@ -619,7 +691,6 @@ class MatchesController extends Controller
             if ($leagueMatches) {
                 $allPrematchMatches = array_merge($allPrematchMatches, $leagueMatches);
             } else {
-                // Try stale cache as fallback for prematch matches
                 $staleCacheKey = "prematch_matches_stale:{$sportId}:{$leagueId}";
                 $staleMatches = Cache::get($staleCacheKey);
                 if ($staleMatches) {
@@ -633,10 +704,8 @@ class MatchesController extends Controller
             }
         }
 
-        // Apply same visibility filters as database queries
         $allPrematchMatches = $this->filterMatchesByVisibilityRules($allPrematchMatches);
 
-        // Attach images to matches
         $allPrematchMatches = $this->attachImagesToMatches($allPrematchMatches);
 
         return $allPrematchMatches;
@@ -682,9 +751,7 @@ class MatchesController extends Controller
 
     private function triggerBackgroundSync($sportId, $leagueIds, $matchType)
     {
-        // If no specific leagues provided, trigger sync for all leagues of the sport
         if (empty($leagueIds)) {
-            // Get all league IDs for this sport from database
             $allLeagueIds = DB::table('leagues')
                 ->where('sportId', $sportId)
                 ->pluck('pinnacleId')
@@ -698,8 +765,6 @@ class MatchesController extends Controller
             ]);
         }
 
-        // Trigger appropriate background jobs based on match type
-        // Route jobs to appropriate queues for proper processing
         if ($matchType === 'all' || $matchType === 'live') {
             \App\Jobs\LiveMatchSyncJob::dispatch($sportId, $leagueIds)->onQueue('live-sync');
         }
@@ -708,7 +773,6 @@ class MatchesController extends Controller
             \App\Jobs\PrematchSyncJob::dispatch($sportId, $leagueIds)->onQueue('prematch-sync');
         }
 
-        // Always trigger odds sync for active matches
         \App\Jobs\OddsSyncJob::dispatch()->onQueue('odds-sync');
     }
 
@@ -733,10 +797,8 @@ class MatchesController extends Controller
                 'marketType' => $marketType
             ]);
 
-            // Get special markets from Pinnacle API
             $marketsData = $this->pinnacleApi->getSpecialMarkets('prematch', $sportId);
 
-            // Process and filter odds data
             $oddsData = $this->processMatchOdds($marketsData, $matchId, $period, $marketType);
 
             return response()->json($oddsData);
@@ -754,26 +816,20 @@ class MatchesController extends Controller
         }
     }
 
-    /**
-     * Store or update matches in database with resolved team IDs.
-     */
     private function storeMatches(array $matches): void
     {
         foreach ($matches as $matchData) {
             try {
-                // Parse the scheduled time
                 $scheduledTime = null;
                 if ($matchData['scheduled_time'] !== 'TBD') {
                     $scheduledTime = \DateTime::createFromFormat('m/d/Y, H:i:s', $matchData['scheduled_time']);
                 }
 
-                // Determine if it's live based on match_type
                 $isLive = $matchData['match_type'] === 'live';
 
                 SportsMatch::updateOrCreate(
-                    ['eventId' => $matchData['id']], // Primary key
+                    ['eventId' => $matchData['id']],
                     [
-                        // Legacy string fields (keep for backward compatibility)
                         'homeTeam' => $matchData['home_team'],
                         'awayTeam' => $matchData['away_team'],
 
@@ -815,12 +871,8 @@ class MatchesController extends Controller
         return strtolower(preg_replace('/[^a-z0-9]/', '', $name));
     }
 
-    /**
-     * Filter matches by selected league IDs
-     */
     private function filterMatchesByLeagues($events, $selectedLeagueIds)
     {
-        // Filter events by selected league IDs
         return array_filter($events, function($event) use ($selectedLeagueIds) {
             $eventLeagueId = $event['league_id'] ?? null;
             return $eventLeagueId && in_array($eventLeagueId, $selectedLeagueIds);
@@ -835,7 +887,6 @@ class MatchesController extends Controller
         $processedMatches = [];
 
         foreach ($events as $event) {
-            // Debug: Log the event structure to understand what fields are available
             Log::debug('Processing match event', [
                 'event_id' => $event['event_id'] ?? 'unknown',
                 'available_keys' => array_keys($event),
@@ -845,18 +896,16 @@ class MatchesController extends Controller
                 'starts' => $event['starts'] ?? 'not_set'
             ]);
 
-            // Get basic match info from the actual Pinnacle API format
             $homeTeamName = $event['home'] ?? 'Unknown';
             $awayTeamName = $event['away'] ?? 'Unknown';
             $leagueId = $event['league_id'] ?? null;
             $leagueName = $event['league_name'] ?? 'Unknown League';
             $sportId = $event['sport_id'] ?? null;
 
-            // Resolve team IDs using the team resolution service
             $homeTeamResolution = $this->teamResolutionService->resolveTeamId(
                 'pinnacle',
                 $homeTeamName,
-                null, // Pinnacle doesn't provide team IDs in match data
+                null,
                 $sportId,
                 $leagueId
             );
@@ -864,7 +913,7 @@ class MatchesController extends Controller
             $awayTeamResolution = $this->teamResolutionService->resolveTeamId(
                 'pinnacle',
                 $awayTeamName,
-                null, // Pinnacle doesn't provide team IDs in match data
+                null,
                 $sportId,
                 $leagueId
             );
@@ -879,28 +928,21 @@ class MatchesController extends Controller
                 'away_created' => $awayTeamResolution['created']
             ]);
 
-            // Don't show fake odds count - will be calculated from real data when loaded
             $oddsCount = 0;
 
-            // Check if markets are open
             $hasOpenMarkets = $event['is_have_open_markets'] ?? false;
 
-            // Determine match type based on live_status_id
-            // live_status_id > 0 indicates a live match
             $isLive = ($event['live_status_id'] ?? 0) > 0;
             $matchType = $isLive ? 'live' : 'prematch';
 
-            // Filter by requested match type if it's not 'all'
-            // This ensures we only return the type of matches requested
             if ($requestedMatchType !== 'all' && $matchType !== $requestedMatchType) {
-                // Skip this match - it doesn't match the requested type
                 Log::debug('Skipping match due to type mismatch', [
                     'event_id' => $event['event_id'],
                     'requested_type' => $requestedMatchType,
                     'actual_type' => $matchType,
                     'live_status_id' => $event['live_status_id']
                 ]);
-                continue; // Skip processing this match
+                continue;
             }
 
             Log::debug('Match type determination', [
@@ -910,13 +952,11 @@ class MatchesController extends Controller
                 'matchType' => $matchType
             ]);
 
-            // Format scheduled time
             $scheduledTime = $event['starts'] ?? null;
             $formattedTime = $scheduledTime ?
-                date('m/d/Y, H:i:s', strtotime($scheduledTime)) :
+                \Carbon\Carbon::parse($scheduledTime)->setTimezone('UTC')->format('m/d/Y, H:i:s T') :
                 'TBD';
 
-            // Load team data for the response
             $homeTeamData = null;
             $awayTeamData = null;
 
@@ -956,31 +996,30 @@ class MatchesController extends Controller
                 }
             }
 
-            // Build images key from API-Football enrichment data
             $images = [
                 'home_team_logo' => $homeEnrichment['logo_url'] ?? null,
                 'away_team_logo' => $awayEnrichment['logo_url'] ?? null,
-                'league_logo' => null, // League logos not currently stored
-                'country_flag' => null  // Country flags not currently stored
+                'league_logo' => null,
+                'country_flag' => null
             ];
 
 
             $processedMatches[] = [
                 'id' => $event['event_id'],
                 'sport_id' => $sportId,
-                'home_team' => $homeTeamName, // Keep legacy field for backward compatibility
-                'away_team' => $awayTeamName, // Keep legacy field for backward compatibility
-                'home_team_id' => $homeTeamResolution['team_id'], // New FK field
-                'away_team_id' => $awayTeamResolution['team_id'], // New FK field
-                'home_team_data' => $homeTeamData, // New structured team data
-                'away_team_data' => $awayTeamData, // New structured team data
+                'home_team' => $homeTeamName,
+                'away_team' => $awayTeamName,
+                'home_team_id' => $homeTeamResolution['team_id'],
+                'away_team_id' => $awayTeamResolution['team_id'],
+                'home_team_data' => $homeTeamData,
+                'away_team_data' => $awayTeamData,
                 'league_id' => $leagueId,
                 'league_name' => $leagueName,
                 'scheduled_time' => $formattedTime,
                 'match_type' => $matchType,
                 'has_open_markets' => $hasOpenMarkets,
                 'odds_count' => $oddsCount,
-                'images' => $images, // Images from API-Football enrichment
+                'images' => $images,
                 'markets' => [
                     'money_line' => ['count' => rand(4, 8), 'available' => true],
                     'spreads' => ['count' => rand(30, 45), 'available' => true],
@@ -999,7 +1038,6 @@ class MatchesController extends Controller
      */
     private function processMatchOdds($marketsData, $matchId, $period, $marketType)
     {
-        // Get match data to include team IDs in odds
         $match = SportsMatch::where('eventId', $matchId)->first();
         if (!$match) {
             return [
@@ -1019,16 +1057,13 @@ class MatchesController extends Controller
 
         $allOdds = [];
 
-        // Try to process real Pinnacle API data first
         if (is_array($marketsData)) {
-            // Process specials markets if available
             if (isset($marketsData['specials']) && is_array($marketsData['specials'])) {
                 foreach ($marketsData['specials'] as $market) {
                     if (isset($market['outcomes']) && is_array($market['outcomes'])) {
                         $marketPeriod = $market['period'] ?? 'Game';
                         $marketName = $market['name'] ?? '';
 
-                        // Skip if period filter doesn't match
                         if ($period !== 'all' && $marketPeriod !== $period) {
                             continue;
                         }
@@ -1049,13 +1084,11 @@ class MatchesController extends Controller
                 }
             }
 
-            // Process special_markets if available
             if (isset($marketsData['special_markets']) && is_array($marketsData['special_markets'])) {
                 foreach ($marketsData['special_markets'] as $market) {
                     if (isset($market['outcomes']) && is_array($market['outcomes'])) {
                         $marketPeriod = $market['period'] ?? 'Game';
 
-                        // Skip if period filter doesn't match
                         if ($period !== 'all' && $marketPeriod !== $period) {
                             continue;
                         }
@@ -1077,9 +1110,7 @@ class MatchesController extends Controller
             }
         }
 
-        // Filter by market type if specified
         if ($marketType !== 'all') {
-            // Map market types to expected names
             $marketTypeMap = [
                 'money_line' => ['Money Line', '1X2', 'Match Winner'],
                 'spreads' => ['Spread', 'Handicap', 'Asian Handicap'],
@@ -1102,9 +1133,7 @@ class MatchesController extends Controller
             }
         }
 
-        // If we have real data, use it; otherwise generate sample data
         if (empty($allOdds)) {
-            // Generate sample data as fallback
             Log::info('No real odds data found, generating sample data', [
                 'matchId' => $matchId,
                 'marketType' => $marketType,
@@ -1151,7 +1180,6 @@ class MatchesController extends Controller
             }
         }
 
-        // Shuffle and limit results
         shuffle($allOdds);
         $showingOdds = array_slice($allOdds, 0, min(20, count($allOdds)));
 
@@ -1165,13 +1193,9 @@ class MatchesController extends Controller
         ];
     }
 
-    /**
-     * Get detailed match information including enrichment data.
-     */
     public function getMatchDetails(Request $request, $matchId)
     {
         try {
-            // Get basic match data from database
             $match = SportsMatch::where('eventId', $matchId)->first();
 
             if (!$match) {
@@ -1180,10 +1204,8 @@ class MatchesController extends Controller
             }
 
 
-            // Get enrichment data (cached)
             $venue = \App\Models\MatchEnrichment::getCachedEnrichment($matchId);
 
-            // Get team enrichment data
             $homeTeam = $match->home_team_id ? \App\Models\Team::find($match->home_team_id) : null;
             $awayTeam = $match->away_team_id ? \App\Models\Team::find($match->away_team_id) : null;
 
@@ -1218,12 +1240,9 @@ class MatchesController extends Controller
                 ];
             }
 
-            // Get players data (cached) - always load and ensure freshness
-            // Player data removed - keeping only team flag images
             $homePlayers = [];
             $awayPlayers = [];
 
-            // Get league name from database if not set
             $leagueName = $match->leagueName;
             if (!$leagueName && $match->leagueId) {
                 $leagueCacheKey = "league:{$match->sportId}:{$match->leagueId}";
@@ -1236,10 +1255,8 @@ class MatchesController extends Controller
                 }
             }
 
-            // Get market information from cache
             $marketInfo = $this->getMarketInfo($match->eventId);
 
-            // Build response
             $response = [
                 'match' => [
                     'id' => $match->eventId,
@@ -1250,7 +1267,7 @@ class MatchesController extends Controller
                     'away_team_id' => $match->away_team_id,
                     'league_id' => $match->leagueId,
                     'league_name' => $leagueName ?: 'NBA', // Default to NBA for basketball
-                    'scheduled_time' => $match->startTime ? $match->startTime->format('m/d/Y, H:i:s') : 'TBD',
+                    'scheduled_time' => $match->startTime ? $match->startTime->setTimezone('UTC')->format('m/d/Y, H:i:s T') : 'TBD',
                     'match_type' => $match->match_type ?? ($match->live_status_id === 1 ? 'live' : 'prematch'),
                     'has_open_markets' => $match->hasOpenMarkets,
                     'live_status_id' => $match->live_status_id,
@@ -1294,11 +1311,9 @@ class MatchesController extends Controller
                 return $cached;
             }
 
-            // Get from database
             $markets = \App\Models\Market::where('match_id', $matchId)->get();
             $totalMarkets = $markets->count();
 
-            // Group by market type for more detailed info
             $marketTypes = $markets->groupBy('market_type');
             $marketCounts = [];
             foreach ($marketTypes as $type => $typeMarkets) {
@@ -1310,7 +1325,6 @@ class MatchesController extends Controller
                 'market_types' => $marketCounts
             ];
 
-            // Cache for 5 minutes
             Cache::put($cacheKey, $info, 300);
 
             return $info;
@@ -1359,10 +1373,10 @@ class MatchesController extends Controller
         try {
             $sportId = $request->input('sport_id');
             $leagueIds = $request->input('league_ids', []);
-            $matchType = $request->input('match_type', 'all'); // 'live', 'prematch', or 'all'
-            $forceRefresh = $request->input('force_refresh', true); // Force refresh regardless of cache
+            $matchType = $request->input('match_type', 'all');
+            $timezone = $request->input('timezone', 'UTC'); // Default to UTC if not provided
+            $forceRefresh = $request->input('force_refresh', true);
 
-            // Validate parameters
             if (!$sportId) {
                 return response()->json(['error' => 'sport_id is required'], 400);
             }
@@ -1378,10 +1392,8 @@ class MatchesController extends Controller
                 'forceRefresh' => $forceRefresh
             ]);
 
-            // Convert Pinnacle IDs to database IDs for the jobs
             $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
 
-            // Dispatch jobs immediately with force refresh
             $jobsDispatched = [];
 
             if ($matchType === 'all' || $matchType === 'live') {
@@ -1396,7 +1408,6 @@ class MatchesController extends Controller
                 $jobsDispatched[] = 'PrematchSyncJob';
             }
 
-            // Always trigger odds sync
             \App\Jobs\OddsSyncJob::dispatch([], $forceRefresh)
                 ->onQueue('odds-sync');
             $jobsDispatched[] = 'OddsSyncJob';
