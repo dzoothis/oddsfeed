@@ -238,6 +238,7 @@
                               </div>
                             </div>
                           </div>
+  
                         </div>
                       </div>
                     </div>
@@ -347,7 +348,6 @@
   
   const periodOptions = ['All', 'Game', '1st Half', '1st Quarter', '2nd Half', '2nd Quarter'];
   const statusOptions = ['All', 'Open', 'Closed'];
-  const teamTypeOptions = ['All', 'Home', 'Away'];
   
   // API Configuration - using centralized HTTP service
 
@@ -360,15 +360,13 @@
         marketFilters.value[match.id] = {
           search: '',
           period: 'All',
-          status: 'All',
-          teamType: 'All'
+          status: 'All'
         };
       }
       if (!dropdowns.value[match.id]) {
         dropdowns.value[match.id] = {
           period: false,
-          status: false,
-          teamType: false
+          status: false
         };
       }
     });
@@ -418,8 +416,7 @@
         marketFilters.value[matchId] = {
           search: '',
           period: 'All',
-          status: 'All',
-          teamType: 'All'
+          status: 'All'
         };
       }
     }
@@ -523,8 +520,7 @@
       marketFilters.value[matchId] = {
         search: '',
         period: 'All',
-        status: 'All',
-        teamType: 'All'
+        status: 'All'
       };
     }
     marketFilters.value[matchId][filterType] = value;
@@ -535,8 +531,7 @@
     if (!dropdowns.value[matchId]) {
       dropdowns.value[matchId] = {
         period: false,
-        status: false,
-        teamType: false
+        status: false
       };
     }
     dropdowns.value[matchId][filterType] = false;
@@ -604,15 +599,6 @@
         }
       }
 
-      // Team type filter
-      if (filters.teamType && filters.teamType !== 'All') {
-        const match = matches.value.find(m => m.id == matchId);
-        if (!match) return true;
-
-        if (filters.teamType === 'Home' && !isHomeTeam(odd, match)) return false;
-        if (filters.teamType === 'Away' && !isAwayTeam(odd, match)) return false;
-        // 'Both' shows all
-      }
 
       return true;
     });
