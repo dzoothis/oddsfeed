@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use DateTimeZone;
+use Exception;
 
 class MatchesController extends Controller
 {
@@ -234,7 +236,9 @@ class MatchesController extends Controller
                       });
             } elseif ($matchType === 'prematch') {
                 $query->where('eventType', 'prematch')
-                      ->where('betting_availability', '!=', 'available_for_betting');
+                      ->where('betting_availability', '!=', 'available_for_betting')
+                      ->where('startTime', '>', \Carbon\Carbon::now())
+                      ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))');
             } elseif ($matchType === 'available_for_betting') {
                 $query->where('betting_availability', 'available_for_betting')
                       ->where('live_status_id', '!=', -1)
@@ -248,7 +252,11 @@ class MatchesController extends Controller
             if ($matchType === 'all') {
                 $query->where(function($q) {
                     $q->where('live_status_id', '>', 0)
-                      ->orWhere('hasOpenMarkets', true);
+                      ->whereRaw('DATE(startTime) <= DATE(NOW())') // Live matches should not be in the future
+                      ->orWhere(function($subQ) {
+                          $subQ->where('hasOpenMarkets', true)
+                               ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))');
+                      });
                 });
             }
 
@@ -331,7 +339,7 @@ class MatchesController extends Controller
                 'away_team_id' => $match->away_team_id,
                 'league_id' => $match->leagueId,
                 'league_name' => $match->league ? $match->league->name : 'League ' . $match->leagueId,
-                'scheduled_time' => $match->startTime ? $match->startTime->setTimezone($timezone ?: 'UTC')->format('m/d/Y, h:i A T') : 'TBD',
+                'scheduled_time' => $match->startTime ? $this->formatScheduledTime($match->startTime, $timezone) : 'TBD',
                 'match_type' => $match->match_type ?? $match->eventType,
                 'betting_availability' => $isLiveVisible ? 'live' : ($match->betting_availability ?? 'prematch'),
                 'live_status_id' => $match->live_status_id ?? 0,
@@ -461,10 +469,11 @@ class MatchesController extends Controller
 
     /**
      * Authoritative helper to determine if a match should be visible as LIVE
-     * Returns true ONLY when:
+     * Returns true when:
      * - startTime is NOT NULL
      * - startTime <= current time (match has started)
-     * - live_status_id > 0 OR API-Football score exists (home_score > 0 OR away_score > 0)
+     * - live_status_id is not -1 (cancelled) or 2 (finished)
+     * - AND either live_status_id > 0 OR API-Football score exists (home_score > 0 OR away_score > 0)
      */
     private function isLiveVisible($match): bool
     {
@@ -489,13 +498,34 @@ class MatchesController extends Controller
         }
 
         $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
+
+        // Match is cancelled or finished - never show as live
+        if ($liveStatusId === -1 || $liveStatusId === 2) {
+            Log::debug('Match excluded from live visibility - cancelled or finished', [
+                'match_id' => isset($match['id']) ? $match['id'] : (isset($match->eventId) ? $match->eventId : 'unknown'),
+                'live_status_id' => $liveStatusId
+            ]);
+            return false;
+        }
+
         $homeScore = isset($match['home_score']) ? $match['home_score'] : (isset($match->home_score) ? $match->home_score : 0);
         $awayScore = isset($match['away_score']) ? $match['away_score'] : (isset($match->away_score) ? $match->away_score : 0);
 
         $hasPinnacleLive = $liveStatusId > 0;
         $hasApiFootballLive = ($homeScore > 0 || $awayScore > 0);
 
-        return $hasPinnacleLive || $hasApiFootballLive;
+        // If Pinnacle confirms it's live or we have scores, definitely show as live
+        if ($hasPinnacleLive || $hasApiFootballLive) {
+            return true;
+        }
+
+        // For matches that have started but Pinnacle hasn't confirmed yet,
+        // we still consider them potentially live if they have open markets
+        // This handles the delay between actual match start and Pinnacle API update
+        $hasOpenMarkets = isset($match['hasOpenMarkets']) ? $match['hasOpenMarkets'] : (isset($match->hasOpenMarkets) ? $match->hasOpenMarkets : false);
+        $hasOpenMarketsArray = isset($match['has_open_markets']) ? $match['has_open_markets'] : false;
+
+        return $hasOpenMarkets || $hasOpenMarketsArray;
     }
 
     /**
@@ -539,6 +569,20 @@ class MatchesController extends Controller
             return true;
         } catch (Exception $e) {
             return false;
+        }
+    }
+
+    /**
+     * Format scheduled time with fallback for invalid timezones
+     */
+    private function formatScheduledTime($startTime, string $timezone = null): string
+    {
+        try {
+            $validTimezone = $timezone && $this->isValidTimezone($timezone) ? $timezone : 'UTC';
+            return $startTime->setTimezone($validTimezone)->format('m/d/Y, h:i A T');
+        } catch (Exception $e) {
+            // Fallback to UTC if timezone conversion fails
+            return $startTime->setTimezone('UTC')->format('m/d/Y, h:i A T');
         }
     }
 
@@ -612,8 +656,9 @@ class MatchesController extends Controller
     private function filterStalePrematchMatches($matches)
     {
         $twoHoursAgo = now()->subMinutes(120);
+        $twoDaysFromNow = now()->addDays(2)->endOfDay();
 
-        return array_filter($matches, function($match) use ($twoHoursAgo) {
+        return array_filter($matches, function($match) use ($twoHoursAgo, $twoDaysFromNow) {
             // Check status field
             $status = $match['status'] ?? $match['eventType'] ?? null;
             if ($status === 'finished') {
@@ -643,6 +688,21 @@ class MatchesController extends Controller
                             'age_minutes' => $twoHoursAgo->diffInMinutes($startTime)
                         ]);
                         return false;
+                    }
+
+                    // Filter out matches that are more than 1 day in the future
+                    if ($startTime) {
+                        $matchDate = $startTime->format('Y-m-d');
+                        $maxDate = now()->addDays(1)->format('Y-m-d');
+                        if ($matchDate > $maxDate) {
+                            Log::debug('Discarded cached prematch match - too far in future', [
+                                'match_id' => $match['id'] ?? 'unknown',
+                                'match_date' => $matchDate,
+                                'max_allowed_date' => $maxDate,
+                                'days_ahead' => now()->diffInDays($startTime)
+                            ]);
+                            return false;
+                        }
                     }
                 } catch (\Exception $e) {
                     Log::warning('Failed to parse startTime in cached match', [

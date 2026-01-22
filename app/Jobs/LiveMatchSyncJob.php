@@ -9,11 +9,11 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use App\Services\PinnacleService;
 use App\Services\TeamResolutionService;
 use App\Services\ApiFootballService;
 use App\Models\SportsMatch;
-use Illuminate\Support\Facades\DB;
 
 class LiveMatchSyncJob implements ShouldQueue
 {
@@ -520,9 +520,9 @@ class LiveMatchSyncJob implements ShouldQueue
 
                     // Remove from database as well
                     $this->removeFinishedMatchFromDatabase(
-                        $finishedMatchesLookup[$lookupKey]['original_home'],
-                        $finishedMatchesLookup[$lookupKey]['original_away'],
-                        'live_sync_' . $finishedMatchesLookup[$lookupKey]['status']
+                        $finishedMatchesLookup[$lookupKey]['original_home'] ?? '',
+                        $finishedMatchesLookup[$lookupKey]['original_away'] ?? '',
+                        'live_sync_' . ($finishedMatchesLookup[$lookupKey]['status'] ?? 'unknown')
                     );
 
                     continue; // Skip this finished match
