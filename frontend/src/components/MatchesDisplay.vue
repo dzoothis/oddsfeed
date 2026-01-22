@@ -238,30 +238,6 @@
                               </div>
                             </div>
                           </div>
-  
-                          <!-- Team Type Filter -->
-                          <div class="relative">
-                            <button
-                              @click="toggleDropdown(match.id, 'teamType')"
-                              type="button"
-                              class="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-2 min-w-[120px]"
-                            >
-                              <span>{{ getFilterValue(match.id, 'teamType') || 'Team Type' }}</span>
-                              <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-180': dropdowns[match.id]?.teamType }"
-                                   fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                              </svg>
-                            </button>
-  
-                            <div v-if="dropdowns[match.id]?.teamType"
-                                 class="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg">
-                              <div v-for="type in teamTypeOptions" :key="type"
-                                   @click="setFilter(match.id, 'teamType', type)"
-                                   class="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm">
-                                {{ type }}
-                              </div>
-                            </div>
-                          </div>
                         </div>
                       </div>
                     </div>
