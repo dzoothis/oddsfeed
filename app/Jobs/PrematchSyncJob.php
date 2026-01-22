@@ -819,7 +819,7 @@ class PrematchSyncJob implements ShouldQueue
                         'home_score' => $matchData['home_score'] ?? 0,
                         'away_score' => $matchData['away_score'] ?? 0,
                         'match_duration' => $matchData['match_duration'] ?? null,
-                            'lastUpdated' => now()
+                            'lastUpdated' => $matchData['pinnacle_last_update'] ? \Carbon\Carbon::createFromTimestamp($matchData['pinnacle_last_update']) : now()
                         ]
                     );
 

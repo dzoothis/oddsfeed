@@ -127,11 +127,19 @@ class LiveMatchSyncJob implements ShouldQueue
         // Remove finished matches from database
         $finishedMatchesRemoved = $this->removeFinishedMatches($apiFootballService);
 
+        // Clean up any remaining duplicate matches
+        $duplicatesCleaned = $this->cleanupDuplicateMatches();
+
+        // Update timestamps for live-visible matches that weren't processed by Pinnacle
+        $timestampsUpdated = $this->updateLiveVisibleMatchTimestamps();
+
         Log::info('LiveMatchSyncJob completed successfully', [
             'processed_matches' => count($processedMatches),
             'leagues_updated' => count($matchesByLeague),
             'available_for_betting_updated' => $availableForBettingUpdated,
-            'finished_matches_removed' => $finishedMatchesRemoved
+            'finished_matches_removed' => $finishedMatchesRemoved,
+            'duplicates_cleaned' => $duplicatesCleaned,
+            'live_visible_timestamps_updated' => $timestampsUpdated
         ]);
 
         } catch (\Exception $e) {
@@ -292,6 +300,11 @@ class LiveMatchSyncJob implements ShouldQueue
             try {
                 $existingMatch = SportsMatch::where('eventId', $matchData['id'])->first();
 
+                // If no exact eventId match, try to find duplicate by teams and time
+                if (!$existingMatch) {
+                    $existingMatch = $this->findDuplicateMatch($matchData);
+                }
+
                 // Only update if match doesn't exist or key data changed
                 if (!$existingMatch || $this->hasLiveMatchChanged($existingMatch, $matchData)) {
                     // Validate match type transition (sportsbook safety rules)
@@ -310,8 +323,21 @@ class LiveMatchSyncJob implements ShouldQueue
                         $scheduledTime = \DateTime::createFromFormat('m/d/Y, H:i:s', $matchData['scheduled_time']);
                     }
 
+                    // If we found a duplicate, update it instead of the eventId
+                    $updateKey = $existingMatch ? ['eventId' => $existingMatch->eventId] : ['eventId' => $matchData['id']];
+
+                    // Log if we're merging a duplicate
+                    if ($existingMatch && $existingMatch->eventId != $matchData['id']) {
+                        Log::info('Merging duplicate match', [
+                            'old_event_id' => $existingMatch->eventId,
+                            'new_event_id' => $matchData['id'],
+                            'home_team' => $matchData['home_team'],
+                            'away_team' => $matchData['away_team']
+                        ]);
+                    }
+
                     SportsMatch::updateOrCreate(
-                        ['eventId' => $matchData['id']],
+                        $updateKey,
                         [
                             'homeTeam' => $matchData['home_team'],
                             'awayTeam' => $matchData['away_team'],
@@ -328,7 +354,7 @@ class LiveMatchSyncJob implements ShouldQueue
                             'home_score' => $matchData['home_score'] ?? 0,
                             'away_score' => $matchData['away_score'] ?? 0,
                             'match_duration' => $matchData['match_duration'] ?? null,
-                            'lastUpdated' => now()
+                            'lastUpdated' => $matchData['pinnacle_last_update'] ? \Carbon\Carbon::createFromTimestamp($matchData['pinnacle_last_update']) : now()
                         ]
                     );
 
@@ -958,6 +984,190 @@ class LiveMatchSyncJob implements ShouldQueue
             ]);
             return false;
         }
+    }
+
+    /**
+     * Find duplicate matches by team names and similar timing
+     * This prevents creating duplicate records when Pinnacle updates match details
+     */
+    private function findDuplicateMatch($matchData)
+    {
+        // Only look for duplicates if we have team IDs and scheduled time
+        if (empty($matchData['home_team_id']) || empty($matchData['away_team_id']) || $matchData['scheduled_time'] === 'TBD') {
+            return null;
+        }
+
+        try {
+            $scheduledTime = \DateTime::createFromFormat('m/d/Y, H:i:s', $matchData['scheduled_time']);
+            if (!$scheduledTime) {
+                return null;
+            }
+
+            // Look for matches with same teams within a 4-hour window
+            $startWindow = clone $scheduledTime;
+            $startWindow->modify('-2 hours');
+            $endWindow = clone $scheduledTime;
+            $endWindow->modify('+2 hours');
+
+            $duplicate = SportsMatch::where('home_team_id', $matchData['home_team_id'])
+                ->where('away_team_id', $matchData['away_team_id'])
+                ->whereBetween('startTime', [$startWindow, $endWindow])
+                ->where('sportId', $matchData['sport_id'])
+                ->where('eventId', '!=', $matchData['id']) // Exclude the current eventId
+                ->first();
+
+            if ($duplicate) {
+                Log::info('Found duplicate match to merge', [
+                    'new_event_id' => $matchData['id'],
+                    'existing_event_id' => $duplicate->eventId,
+                    'home_team' => $matchData['home_team'],
+                    'away_team' => $matchData['away_team'],
+                    'scheduled_time_diff' => $duplicate->startTime->diff($scheduledTime)->format('%h hours %i minutes')
+                ]);
+            }
+
+            return $duplicate;
+        } catch (\Exception $e) {
+            Log::warning('Error finding duplicate match', [
+                'event_id' => $matchData['id'],
+                'home_team' => $matchData['home_team'],
+                'away_team' => $matchData['away_team'],
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Clean up duplicate matches by removing finished duplicates when live versions exist
+     */
+    private function cleanupDuplicateMatches(): int
+    {
+        $cleanedCount = 0;
+
+        try {
+            // Find groups of matches with same teams and similar timing
+            $potentialDuplicates = DB::select("
+                SELECT
+                    home_team_id,
+                    away_team_id,
+                    DATE(startTime) as match_date,
+                    COUNT(*) as match_count,
+                    GROUP_CONCAT(eventId) as event_ids,
+                    GROUP_CONCAT(live_status_id) as statuses,
+                    GROUP_CONCAT(lastUpdated ORDER BY lastUpdated DESC) as update_times
+                FROM matches
+                WHERE home_team_id IS NOT NULL
+                  AND away_team_id IS NOT NULL
+                  AND startTime IS NOT NULL
+                  AND sportId = ?
+                GROUP BY home_team_id, away_team_id, DATE(startTime)
+                HAVING COUNT(*) > 1
+                ORDER BY match_date DESC
+            ", [$this->sportId ?? 1]);
+
+            foreach ($potentialDuplicates as $group) {
+                $eventIds = explode(',', $group->event_ids);
+                $statuses = explode(',', $group->statuses);
+                $updateTimes = explode(',', $group->update_times);
+
+                // Find the most recent/live match to keep
+                $keepIndex = null;
+                $hasLiveMatch = false;
+
+                foreach ($statuses as $index => $status) {
+                    if ($status == 1) { // Live match
+                        $keepIndex = $index;
+                        $hasLiveMatch = true;
+                        break;
+                    } elseif ($status == 0 && !$hasLiveMatch) { // Available for betting
+                        $keepIndex = $index;
+                    }
+                }
+
+                // If we found a match to keep, remove the others
+                if ($keepIndex !== null) {
+                    foreach ($eventIds as $index => $eventId) {
+                        if ($index != $keepIndex) {
+                            $matchToDelete = SportsMatch::where('eventId', $eventId)->first();
+                            if ($matchToDelete) {
+                                Log::info('Removing duplicate finished match', [
+                                    'event_id' => $eventId,
+                                    'home_team_id' => $group->home_team_id,
+                                    'away_team_id' => $group->away_team_id,
+                                    'status' => $statuses[$index],
+                                    'keeping_event_id' => $eventIds[$keepIndex]
+                                ]);
+
+                                $matchToDelete->delete();
+                                $cleanedCount++;
+                            }
+                        }
+                    }
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error cleaning up duplicate matches', [
+                'error' => $e->getMessage(),
+                'sportId' => $this->sportId
+            ]);
+        }
+
+        return $cleanedCount;
+    }
+
+    /**
+     * Update timestamps for matches that are visible as "live" but weren't processed by Pinnacle sync
+     * This ensures live-visible matches show current timestamps even if Pinnacle doesn't update them
+     */
+    private function updateLiveVisibleMatchTimestamps(): int
+    {
+        $updatedCount = 0;
+
+        try {
+            // Find matches that are visible as "live" in the frontend but not updated recently
+            // These are matches that:
+            // - Have started (startTime <= now)
+            // - Are not finished/cancelled (live_status_id not 2 or -1)
+            // - Either have live_status_id = 1 OR (have open markets AND are available for betting)
+            // - Were last updated more than 5 minutes ago
+
+            $liveVisibleMatches = SportsMatch::where('startTime', '<=', now())
+                ->whereNotIn('live_status_id', [-1, 2]) // Not cancelled or finished
+                ->where(function($q) {
+                    $q->where('live_status_id', 1) // Actually live
+                      ->orWhere(function($subQ) {
+                          $subQ->where('hasOpenMarkets', true)
+                               ->where('betting_availability', 'available_for_betting');
+                      });
+                })
+                ->where('lastUpdated', '<', now()->subMinutes(5)) // Not updated in last 5 minutes
+                ->where('sportId', $this->sportId ?? 1)
+                ->get();
+
+            foreach ($liveVisibleMatches as $match) {
+                $match->update(['lastUpdated' => now()]);
+                $updatedCount++;
+
+                Log::debug('Updated timestamp for live-visible match', [
+                    'event_id' => $match->eventId,
+                    'home_team' => $match->homeTeam,
+                    'away_team' => $match->awayTeam,
+                    'live_status_id' => $match->live_status_id,
+                    'has_open_markets' => $match->hasOpenMarkets,
+                    'betting_availability' => $match->betting_availability
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error updating live-visible match timestamps', [
+                'error' => $e->getMessage(),
+                'sportId' => $this->sportId
+            ]);
+        }
+
+        return $updatedCount;
     }
 
     /**
