@@ -151,8 +151,7 @@ const filteredMarkets = computed(() => {
   
   if (filters.value.searchQuery) {
     const q = filters.value.searchQuery.toLowerCase();
-    markets = markets.filter(m => 
-      (m.teamType && m.teamType.toLowerCase().includes(q)) ||
+    markets = markets.filter(m =>
       (m.bet && m.bet.toLowerCase().includes(q))
     );
   }
@@ -172,7 +171,6 @@ const paginatedMarkets = computed(() => {
 });
 
 const getMarketLabel = (market) => {
-  if (market.teamType) return market.teamType;
   if (market.bet) return market.bet;
   return 'Market';
 };

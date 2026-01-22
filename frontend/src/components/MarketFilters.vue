@@ -21,15 +21,16 @@
         <!-- Filter Dropdowns -->
         <div class="flex items-center gap-2 flex-wrap">
           <div v-for="(options, type) in filterOptions" :key="type" class="relative">
-            <button 
+            <button
               v-if="shouldShowFilter(type) && options.length > 0"
               @click="toggleDropdown(type)"
               class="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-2"
             >
-              {{ formatLabel(type) }}
-              <span v-if="selectedFilters[type].length" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-0.5 rounded">
-                {{ selectedFilters[type].length }}
+              <span class="font-medium">{{ formatLabel(type) }}</span>
+              <span v-if="selectedFilters[type].length" class="text-blue-600 font-semibold">
+                ({{ selectedFilters[type].length }})
               </span>
+              <span v-else class="text-gray-500">All</span>
               <span>▼</span>
             </button>
             
@@ -77,7 +78,6 @@ const searchQuery = ref('');
 const selectedFilters = ref({
   period: [],
   status: [],
-  teamType: [],
   line: [],
   betType: [],
   cardType: [],
@@ -90,11 +90,11 @@ const dropdownOpen = ref({});
 const filterOptions = computed(() => {
   if (!props.markets) return {};
   const m = props.markets;
-  
+
+  // ONLY generate these 4 filters - NO Home/Away teamType filters
   return {
     period: [...new Set(m.map(x => x.period).filter(Boolean))].sort(),
     status: [...new Set(m.map(x => x.status).filter(Boolean))].sort(),
-    teamType: [...new Set(m.map(x => x.teamType).filter(Boolean))].sort(),
     line: [...new Set(m.map(x => x.line).filter(Boolean))].sort(),
     betType: [...new Set(m.map(x => x.bet).filter(b => b === 'Over' || b === 'Under'))].sort(),
   };
@@ -107,13 +107,22 @@ const activeFilterCount = computed(() => {
 });
 
 const shouldShowFilter = (type) => {
+  // COMPLETELY HIDE Home/Away team type filters
+  if (type === 'teamType') return false;
+
   if (type === 'period' && ['yellowCards', 'incidents'].includes(props.tabId)) return false;
   if (type === 'line' && !['spreads', 'totals', 'teamTotals'].includes(props.tabId)) return false;
   return true;
 };
 
 const formatLabel = (type) => {
-  return type.replace(/([A-Z])/g, ' ').replace(/^./, str => str.toUpperCase());
+  const labels = {
+    period: 'Period',
+    status: 'Status',
+    line: 'Line',
+    betType: 'Bet Type'
+  };
+  return labels[type] || type.replace(/([A-Z])/g, ' ').replace(/^./, str => str.toUpperCase());
 };
 
 const toggleDropdown = (type) => {
