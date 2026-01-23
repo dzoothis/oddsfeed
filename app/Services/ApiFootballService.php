@@ -224,6 +224,55 @@ class ApiFootballService
     }
 
     /**
+     * Get lineups/players for a specific fixture from API-Football
+     * 
+     * @param int $fixtureId The API-Football fixture ID
+     * @param int|null $sportId Optional sport ID to determine correct API base URL
+     * @return array Player/lineup data from API-Football
+     */
+    public function getFixtureLineups($fixtureId, $sportId = null)
+    {
+        if (!$fixtureId) {
+            Log::warning('API-Football getFixtureLineups called without fixtureId');
+            return [];
+        }
+
+        // Determine API endpoint based on sport
+        $baseUrl = $this->getBaseUrlForSport($sportId ?? 1); // Default to football
+
+        try {
+            $response = $this->client->request('GET', $baseUrl . '/fixtures/lineups', [
+                'headers' => [
+                    'x-apisports-key' => $this->apiKey
+                ],
+                'query' => [
+                    'fixture' => $fixtureId
+                ]
+            ]);
+
+            $data = json_decode($response->getBody(), true);
+
+            $responseData = is_array($data) && isset($data['response']) ? $data['response'] : [];
+            
+            Log::info('API-Football Lineups Response', [
+                'fixtureId' => $fixtureId,
+                'status' => $response->getStatusCode(),
+                'has_data' => !empty($responseData),
+                'response_count' => count($responseData),
+                'response_structure' => !empty($responseData) ? array_keys($responseData[0] ?? []) : []
+            ]);
+
+            return $responseData;
+        } catch (\Exception $e) {
+            Log::error('API-Football Error (Lineups)', [
+                'fixtureId' => $fixtureId,
+                'error' => $e->getMessage()
+            ]);
+            return [];
+        }
+    }
+
+    /**
      * Get odds for a specific fixture from API-Football
      * 
      * @param int $fixtureId The API-Football fixture ID
