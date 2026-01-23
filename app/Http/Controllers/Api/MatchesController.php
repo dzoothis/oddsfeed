@@ -215,10 +215,22 @@ class MatchesController extends Controller
     private function getMatchesFromDatabase($sportId, $leagueIds, $matchType, $timezone = 'UTC')
     {
         try {
+            // Convert user timezone to UTC for database comparisons
+            // Database stores times in UTC, so we need to compare with UTC time
+            // But we use user's timezone to determine "now" from their perspective
+            try {
+                $userTimezone = new \DateTimeZone($timezone);
+                $userNow = \Carbon\Carbon::now($timezone);
+                $utcNow = $userNow->utc(); // Convert to UTC for database comparison
+            } catch (\Exception $e) {
+                // Fallback to UTC if timezone is invalid
+                Log::warning('Invalid timezone provided, using UTC', ['timezone' => $timezone, 'error' => $e->getMessage()]);
+                $utcNow = \Carbon\Carbon::now('UTC');
+            }
 
             $query = SportsMatch::with('league')
                 ->where('sportId', $sportId)
-                ->where('lastUpdated', '>', now()->subHours(24));
+                ->where('lastUpdated', '>', $utcNow->copy()->subHours(24));
             
             // Note: Sorting will be applied after matchType conditions are set
 
@@ -228,7 +240,7 @@ class MatchesController extends Controller
             }
 
             if ($matchType === 'live') {
-                $query->where('startTime', '<=', \Carbon\Carbon::now())
+                $query->where('startTime', '<=', $utcNow)
                       ->where('startTime', '!=', null)
                       ->where(function($q) {
                           $q->where('live_status_id', '>', 0)
@@ -238,46 +250,46 @@ class MatchesController extends Controller
                       // Exclude matches that are likely finished:
                       // 1. Matches that started more than 4 hours ago AND haven't been updated in the last 30 minutes
                       // 2. Matches that started more than 3 hours ago AND have scores but no recent updates
-                      ->where(function($q) {
-                          $q->where(function($subQ) {
+                      ->where(function($q) use ($utcNow) {
+                          $q->where(function($subQ) use ($utcNow) {
                               // Matches updated recently (within last 30 minutes) are considered active
-                              $subQ->where('lastUpdated', '>', now()->subMinutes(30));
-                          })->orWhere(function($subQ) {
+                              $subQ->where('lastUpdated', '>', $utcNow->copy()->subMinutes(30));
+                          })->orWhere(function($subQ) use ($utcNow) {
                               // OR matches that started within the last 3 hours (likely still live)
-                              $subQ->where('startTime', '>', now()->subHours(3));
-                          })->orWhere(function($subQ) {
+                              $subQ->where('startTime', '>', $utcNow->copy()->subHours(3));
+                          })->orWhere(function($subQ) use ($utcNow) {
                               // OR matches with live_status_id = 1 (confirmed live by Pinnacle) that started within last 4 hours
                               $subQ->where('live_status_id', '=', 1)
-                                   ->where('startTime', '>', now()->subHours(4));
+                                   ->where('startTime', '>', $utcNow->copy()->subHours(4));
                           });
                       });
             } elseif ($matchType === 'prematch') {
                 $query->where('eventType', 'prematch')
                       ->where('betting_availability', '!=', 'available_for_betting')
-                      ->where('startTime', '>', \Carbon\Carbon::now())
+                      ->where('startTime', '>', $utcNow)
                       ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 2 DAY))');
             } elseif ($matchType === 'available_for_betting') {
                 $query->where('betting_availability', 'available_for_betting')
                       ->where('live_status_id', '!=', -1)
                       ->where('live_status_id', '=', 0)
-                      ->where('startTime', '>', \Carbon\Carbon::now());
+                      ->where('startTime', '>', $utcNow);
             }
 
             $query->where('live_status_id', '!=', -1)
                   ->where('live_status_id', '!=', 2);
 
             if ($matchType === 'all') {
-                $query->where(function($q) {
+                $query->where(function($q) use ($utcNow) {
                     // Include live matches (regardless of age)
-                    $q->where(function($liveQ) {
+                    $q->where(function($liveQ) use ($utcNow) {
                         $liveQ->where('live_status_id', '>', 0)
-                              ->whereRaw('DATE(startTime) <= DATE(NOW())'); // Live matches should not be in the future
+                              ->where('startTime', '<=', $utcNow); // Live matches should not be in the future (timezone-aware)
                     })
                     // OR include prematch matches with open markets within 2 days
-                    ->orWhere(function($subQ) {
+                    ->orWhere(function($subQ) use ($utcNow) {
                         $subQ->where('hasOpenMarkets', true)
                              ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 2 DAY))')
-                             ->where('startTime', '>', \Carbon\Carbon::now()); // Future matches only
+                             ->where('startTime', '>', $utcNow); // Future matches only (timezone-aware)
                     });
                 });
             }
