@@ -15,22 +15,24 @@
 
 # Laravel storage and logs
 /storage/app/*
-/storage/framework/cache/*
-/storage/framework/sessions/*
-/storage/framework/views/*
-/storage/logs/*
 !/storage/app/.gitkeep
-!/storage/framework/.gitkeep
+/storage/framework/cache/*
 !/storage/framework/cache/.gitkeep
+/storage/framework/sessions/*
 !/storage/framework/sessions/.gitkeep
+/storage/framework/views/*
 !/storage/framework/views/.gitkeep
+/storage/logs/*
 !/storage/logs/.gitkeep
+!/storage/framework/.gitkeep
 
 # Laravel public files
 /public/build
 /public/hot
 /public/storage
 /public/uploads
+/public/assets/
+/public/index.html
 
 # Laravel environment files
 .env
@@ -47,6 +49,9 @@
 .phpunit.result.cache
 .phpunit.cache/
 
+# Laravel compiled files
+/bootstrap/compiled.php
+
 # Laravel Sail
 /sail
 /docker-compose.override.yml
@@ -57,9 +62,6 @@ Homestead.yaml
 
 # Laravel Vapor
 /vapor
-
-# Laravel Jetstream
-/artisan
 
 # Laravel authentication
 /auth.json
@@ -290,6 +292,12 @@ known_hosts
 
 # Google Service Account keys
 *.json
+!composer.json
+!package.json
+!tsconfig.json
+!jsconfig.json
+# Ignore root package-lock.json (no package.json in root)
+/package-lock.json
 
 # =============================================================================
 # Documentation & Assets
@@ -339,3 +347,17 @@ known_hosts
 
 # Custom project files
 QUEUE_SETUP_README.md
+
+# =============================================================================
+# Build Artifacts & Compiled Files
+# =============================================================================
+
+# Frontend build outputs (deployed to public/)
+/public/assets/
+/public/index.html
+
+# Keep public directory structure but ignore built files
+!/public/.htaccess
+!/public/favicon.ico
+!/public/index.php
+!/public/robots.txt
