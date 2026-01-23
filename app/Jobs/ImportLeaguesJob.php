@@ -334,17 +334,18 @@ class ImportLeaguesJob implements ShouldQueue
     private function getOptimalLeagueLimit(int $sportId, int $availableLeagues): int
     {
         // Sport-specific limits based on typical league counts and activity
+        // Updated to 2000 leagues limit for all sports to match Pinnacle's extensive coverage
         $sportLimits = [
-            1 => 500,   // Soccer - major leagues are active
-            2 => 1000,  // Tennis - many tournaments but need coverage
-            3 => 200,   // Basketball - NBA + major international
-            4 => 300,   // Hockey - NHL + international
-            5 => 100,   // Volleyball - major leagues
-            6 => 100,   // Handball - major leagues
-            7 => 100,   // American Football - NFL + major leagues
+            1 => 2000,   // Soccer - major leagues are active
+            2 => 2000,   // Tennis - many tournaments but need coverage
+            3 => 2000,   // Basketball - NBA + major international
+            4 => 2000,   // Hockey - NHL + international
+            5 => 2000,   // Volleyball - major leagues
+            6 => 2000,   // Handball - major leagues
+            7 => 2000,   // American Football - NFL + major leagues
         ];
 
-        $defaultLimit = $sportLimits[$sportId] ?? 200;
+        $defaultLimit = $sportLimits[$sportId] ?? 2000;
 
         // If API returns fewer leagues than our limit, use all available
         return min($availableLeagues, $defaultLimit);

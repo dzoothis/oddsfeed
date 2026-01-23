@@ -251,16 +251,22 @@ class MatchesController extends Controller
 
             if ($matchType === 'all') {
                 $query->where(function($q) {
-                    $q->where('live_status_id', '>', 0)
-                      ->whereRaw('DATE(startTime) <= DATE(NOW())') // Live matches should not be in the future
-                      ->orWhere(function($subQ) {
-                          $subQ->where('hasOpenMarkets', true)
-                               ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))');
-                      });
+                    // Include live matches (regardless of age)
+                    $q->where(function($liveQ) {
+                        $liveQ->where('live_status_id', '>', 0)
+                              ->whereRaw('DATE(startTime) <= DATE(NOW())'); // Live matches should not be in the future
+                    })
+                    // OR include prematch matches with open markets within 24 hours
+                    ->orWhere(function($subQ) {
+                        $subQ->where('hasOpenMarkets', true)
+                             ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))')
+                             ->where('startTime', '>', \Carbon\Carbon::now()); // Future matches only
+                    });
                 });
             }
 
-            if ($matchType !== 'live') {
+            // Only apply 150-minute filter to prematch matches, not live matches
+            if ($matchType !== 'live' && $matchType !== 'all') {
                 $query->whereRaw('(startTime IS NULL OR startTime > DATE_SUB(NOW(), INTERVAL 150 MINUTE))');
             }
 

@@ -108,20 +108,10 @@
                 matchTypeFilter === 'live' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
               Live ({{ liveMatchesCount }})
             </button>
-            <button @click="setMatchTypeFilter('available_for_betting')"
-              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
-                matchTypeFilter === 'available_for_betting' ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
-              Available for Betting ({{ availableForBettingCount }})
-            </button>
             <button @click="setMatchTypeFilter('prematch')"
               :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
                 matchTypeFilter === 'prematch' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
-              Prematch (No Betting) ({{ upcomingMatchesCount }})
-            </button>
-            <button @click="setMatchTypeFilter('all')"
-              :class="['px-3 py-1 text-xs font-medium rounded-full transition-colors',
-                matchTypeFilter === 'all' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200']">
-              All ({{ allMatches.length }})
+              Prematch ({{ upcomingMatchesCount }})
             </button>
           </div>
         </div>
@@ -427,7 +417,7 @@ const allMatches = ref([])
 const allMatchesLoaded = ref(false)
 const loadingMatches = ref(false)
 const pageLoading = ref(false) // Full page loading overlay
-const matchTypeFilter = ref('all')
+const matchTypeFilter = ref('live')
 const matchSearchTerm = ref('')
 const pageTrigger = ref(0)
 
@@ -471,20 +461,25 @@ const liveMatchesCount = computed(() =>
   allMatches.value.filter(match => match.betting_availability === 'live').length
 )
 
-const availableForBettingCount = computed(() =>
-  allMatches.value.filter(match => match.betting_availability === 'available_for_betting').length
-)
-
 const upcomingMatchesCount = computed(() =>
-  allMatches.value.filter(match => match.betting_availability === 'prematch').length
+  allMatches.value.filter(match => 
+    match.betting_availability === 'prematch' || 
+    match.betting_availability === 'available_for_betting'
+  ).length
 )
 
 const filteredMatches = computed(() => {
   let matches = [...allMatches.value]
 
   // Filter by match type
-  if (matchTypeFilter.value !== 'all') {
-    matches = matches.filter(match => match.betting_availability === matchTypeFilter.value)
+  if (matchTypeFilter.value === 'prematch') {
+    // Include both 'prematch' and 'available_for_betting' in prematch filter
+    matches = matches.filter(match => 
+      match.betting_availability === 'prematch' || 
+      match.betting_availability === 'available_for_betting'
+    )
+  } else if (matchTypeFilter.value === 'live') {
+    matches = matches.filter(match => match.betting_availability === 'live')
   }
 
   // Filter by search term
@@ -564,7 +559,7 @@ const selectSport = async (sport) => {
   selectedSport.value = { ...sport }
   allMatchesLoaded.value = false
   allMatches.value = []
-  matchTypeFilter.value = 'all'
+  matchTypeFilter.value = 'live'
   matchSearchTerm.value = ''
   pageTrigger.value++
   await nextTick()

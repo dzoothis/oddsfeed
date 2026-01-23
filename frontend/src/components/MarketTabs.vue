@@ -159,7 +159,32 @@ const filteredMarkets = computed(() => {
   if (filters.value.selectedPeriods?.length) {
     markets = markets.filter(m => filters.value.selectedPeriods.includes(m.period));
   }
-  
+
+  if (filters.value.teamType?.length) {
+    markets = markets.filter(m => {
+      const match = props.match;
+      if (!match) return true;
+
+      // Check if this market is for Home or Away team
+      let marketTeamType = null;
+
+      // Check team IDs first (preferred method)
+      if (m.home_team_id && match.home_team_id && m.home_team_id === match.home_team_id) {
+        marketTeamType = 'Home';
+      } else if (m.away_team_id && match.away_team_id && m.away_team_id === match.away_team_id) {
+        marketTeamType = 'Away';
+      }
+      // Fallback to string matching
+      else if (m.bet && match.home_team && m.bet.includes(match.home_team)) {
+        marketTeamType = 'Home';
+      } else if (m.bet && match.away_team && m.bet.includes(match.away_team)) {
+        marketTeamType = 'Away';
+      }
+
+      return marketTeamType && filters.value.teamType.includes(marketTeamType);
+    });
+  }
+
   return markets;
 });
 

@@ -78,6 +78,7 @@ const searchQuery = ref('');
 const selectedFilters = ref({
   period: [],
   status: [],
+  teamType: [],
   line: [],
   betType: [],
   cardType: [],
@@ -91,10 +92,34 @@ const filterOptions = computed(() => {
   if (!props.markets) return {};
   const m = props.markets;
 
-  // ONLY generate these 4 filters - NO Home/Away teamType filters
+  // Generate teamType based on available odds
+  const teamTypes = [];
+  const match = props.match; // Get match data from props
+
+  if (match) {
+    m.forEach(odd => {
+      // Check team IDs first (preferred method)
+      if (odd.home_team_id && match.home_team_id && odd.home_team_id === match.home_team_id) {
+        teamTypes.push('Home');
+      } else if (odd.away_team_id && match.away_team_id && odd.away_team_id === match.away_team_id) {
+        teamTypes.push('Away');
+      }
+      // Fallback to string matching
+      else if (odd.bet && match.home_team && odd.bet.includes(match.home_team)) {
+        teamTypes.push('Home');
+      } else if (odd.bet && match.away_team && odd.bet.includes(match.away_team)) {
+        teamTypes.push('Away');
+      }
+    });
+  }
+
+  // Always provide Home/Away options even if not detected from data
+  const finalTeamTypes = teamTypes.length > 0 ? [...new Set(teamTypes)] : ['Home', 'Away'];
+
   return {
     period: [...new Set(m.map(x => x.period).filter(Boolean))].sort(),
     status: [...new Set(m.map(x => x.status).filter(Boolean))].sort(),
+    teamType: finalTeamTypes.sort(),
     line: [...new Set(m.map(x => x.line).filter(Boolean))].sort(),
     betType: [...new Set(m.map(x => x.bet).filter(b => b === 'Over' || b === 'Under'))].sort(),
   };
@@ -107,9 +132,6 @@ const activeFilterCount = computed(() => {
 });
 
 const shouldShowFilter = (type) => {
-  // COMPLETELY HIDE Home/Away team type filters
-  if (type === 'teamType') return false;
-
   if (type === 'period' && ['yellowCards', 'incidents'].includes(props.tabId)) return false;
   if (type === 'line' && !['spreads', 'totals', 'teamTotals'].includes(props.tabId)) return false;
   return true;
@@ -119,6 +141,7 @@ const formatLabel = (type) => {
   const labels = {
     period: 'Period',
     status: 'Status',
+    teamType: 'Team',
     line: 'Line',
     betType: 'Bet Type'
   };
