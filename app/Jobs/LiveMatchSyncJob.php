@@ -175,8 +175,26 @@ class LiveMatchSyncJob implements ShouldQueue
                     \App\Models\TeamEnrichment::getCachedEnrichment($awayTeamResolution['team_id']) : null;
 
                 // Determine match type: Pinnacle live_status_id takes precedence
-                // IF pinnacle_event.live_status_id === 1 → match_type = "live" ELSE → match_type = "prematch"
+                // BUT: Check if match has actually started (startTime <= now())
+                // Pinnacle "live" = live betting available, not necessarily match started
                 $liveStatusId = $match['live_status_id'] ?? 0;
+                
+                // Check if match has actually started
+                $matchStartTime = isset($match['starts']) ? strtotime($match['starts']) : null;
+                $hasStarted = $matchStartTime && $matchStartTime <= time();
+                
+                // If Pinnacle says live but match hasn't started, mark as prematch
+                if ($liveStatusId === 1 && !$hasStarted) {
+                    $liveStatusId = 0; // Mark as prematch (not actually live yet)
+                    Log::debug('Match marked as prematch - live betting available but match not started', [
+                        'event_id' => $match['event_id'] ?? 'unknown',
+                        'home_team' => $match['home'] ?? 'Unknown',
+                        'away_team' => $match['away'] ?? 'Unknown',
+                        'starts' => $match['starts'] ?? 'N/A',
+                        'pinnacle_live_status_id' => $match['live_status_id'] ?? 0
+                    ]);
+                }
+                
                 $matchType = ($liveStatusId === 1) ? 'live' : 'prematch';
 
                 $processedMatch = [
