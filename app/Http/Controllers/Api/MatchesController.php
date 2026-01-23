@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\League;
 use App\Models\SportsMatch;
+use App\Models\ApiFootballData;
 use App\Services\PinnacleService;
 use App\Services\TeamResolutionService;
+use App\Services\ApiFootballService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
@@ -17,11 +19,13 @@ class MatchesController extends Controller
 {
     protected $pinnacleApi;
     protected $teamResolutionService;
+    protected $apiFootballService;
 
-    public function __construct(PinnacleService $pinnacleApi, TeamResolutionService $teamResolutionService)
+    public function __construct(PinnacleService $pinnacleApi, TeamResolutionService $teamResolutionService, ApiFootballService $apiFootballService)
     {
         $this->pinnacleApi = $pinnacleApi;
         $this->teamResolutionService = $teamResolutionService;
+        $this->apiFootballService = $apiFootballService;
     }
     
     /**
@@ -970,9 +974,32 @@ class MatchesController extends Controller
             $match = SportsMatch::where('eventId', $matchId)->first();
             $eventType = $match && $match->eventType === 'live' ? 'live' : 'prematch';
 
+            // Fetch odds from Pinnacle
             $marketsData = $this->pinnacleApi->getSpecialMarkets($eventType, $sportId);
 
-            $oddsData = $this->processMatchOdds($marketsData, $matchId, $period, $marketType);
+            // Fetch odds from API-Football if fixtureId is available
+            $apiFootballOdds = [];
+            if ($match) {
+                $apiFootballData = ApiFootballData::where('eventId', $matchId)->first();
+                if ($apiFootballData && $apiFootballData->fixtureId) {
+                    try {
+                        $apiFootballOdds = $this->apiFootballService->getOdds($apiFootballData->fixtureId, $sportId);
+                        Log::info('Fetched API-Football odds', [
+                            'matchId' => $matchId,
+                            'fixtureId' => $apiFootballData->fixtureId,
+                            'odds_count' => count($apiFootballOdds)
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::warning('Failed to fetch API-Football odds', [
+                            'matchId' => $matchId,
+                            'fixtureId' => $apiFootballData->fixtureId ?? null,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                }
+            }
+
+            $oddsData = $this->processMatchOdds($marketsData, $matchId, $period, $marketType, $apiFootballOdds);
 
             return response()->json($oddsData);
 
@@ -1209,7 +1236,7 @@ class MatchesController extends Controller
     /**
      * Process detailed odds for a match
      */
-    private function processMatchOdds($marketsData, $matchId, $period, $marketType)
+    private function processMatchOdds($marketsData, $matchId, $period, $marketType, $apiFootballOdds = [])
     {
         $match = SportsMatch::where('eventId', $matchId)->first();
         if (!$match) {
@@ -1230,6 +1257,101 @@ class MatchesController extends Controller
 
         $allOdds = [];
 
+        // Process API-Football odds first (as supplement to Pinnacle)
+        // API-Football response structure: response[0].bookmakers[].bets[].values[]
+        if (!empty($apiFootballOdds) && is_array($apiFootballOdds)) {
+            $apiFootballOddsCount = 0;
+            
+            // Handle API-Football response structure
+            foreach ($apiFootballOdds as $oddsData) {
+                // Check if this is the response array structure
+                if (isset($oddsData['bookmakers']) && is_array($oddsData['bookmakers'])) {
+                    // Direct structure: oddsData has bookmakers
+                    $bookmakers = $oddsData['bookmakers'];
+                } elseif (isset($oddsData['fixture']) && isset($oddsData['bookmakers'])) {
+                    // Response structure: fixture + bookmakers
+                    $bookmakers = $oddsData['bookmakers'];
+                } else {
+                    continue;
+                }
+
+                foreach ($bookmakers as $bookmaker) {
+                    if (!isset($bookmaker['bets']) || !is_array($bookmaker['bets'])) {
+                        continue;
+                    }
+
+                    $bookmakerName = $bookmaker['name'] ?? 'Unknown';
+
+                    foreach ($bookmaker['bets'] as $bet) {
+                        $betName = $bet['name'] ?? '';
+                        $betValues = $bet['values'] ?? [];
+
+                        // Map API-Football bet types to our market types
+                        $marketTypeMatch = false;
+                        $betNameLower = strtolower($betName);
+                        
+                        if ($marketType === 'all') {
+                            $marketTypeMatch = true;
+                        } elseif ($marketType === 'money_line' && in_array($betNameLower, ['match winner', '1x2', 'winner', 'matchwinner'])) {
+                            $marketTypeMatch = true;
+                        } elseif ($marketType === 'totals' && (strpos($betNameLower, 'over') !== false || strpos($betNameLower, 'under') !== false || strpos($betNameLower, 'total') !== false)) {
+                            $marketTypeMatch = true;
+                        } elseif ($marketType === 'spreads' && (strpos($betNameLower, 'handicap') !== false || strpos($betNameLower, 'spread') !== false || strpos($betNameLower, 'asian') !== false)) {
+                            $marketTypeMatch = true;
+                        }
+
+                        if (!$marketTypeMatch) {
+                            continue;
+                        }
+
+                        foreach ($betValues as $value) {
+                            $oddValue = $value['odd'] ?? null;
+                            $valueName = $value['value'] ?? '';
+
+                            if (!$oddValue || !is_numeric($oddValue)) {
+                                continue;
+                            }
+
+                            // Extract line from value name if it's a totals/spreads bet
+                            $line = null;
+                            if (preg_match('/([+-]?\d+\.?\d*)/', $valueName, $matches)) {
+                                $line = $matches[1];
+                            }
+
+                            // For totals, also check if line is in bet name
+                            if ($line === null && ($marketType === 'totals' || $marketType === 'spreads')) {
+                                if (preg_match('/([+-]?\d+\.?\d*)/', $betName, $matches)) {
+                                    $line = $matches[1];
+                                }
+                            }
+
+                            $allOdds[] = [
+                                'bet' => $valueName ?: $betName,
+                                'home_team_id' => $homeTeamId,
+                                'away_team_id' => $awayTeamId,
+                                'line' => $line,
+                                'odds' => number_format((float)$oddValue, 3),
+                                'status' => 'open',
+                                'period' => 'Game',
+                                'source' => 'api-football',
+                                'bookmaker' => $bookmakerName,
+                                'updated_at' => date('Y-m-d H:i:s')
+                            ];
+                            $apiFootballOddsCount++;
+                        }
+                    }
+                }
+            }
+
+            if ($apiFootballOddsCount > 0) {
+                Log::info('Processed API-Football odds', [
+                    'matchId' => $matchId,
+                    'odds_added' => $apiFootballOddsCount
+                ]);
+            }
+        }
+
+        // Process Pinnacle odds (primary source)
         if (is_array($marketsData)) {
             if (isset($marketsData['specials']) && is_array($marketsData['specials'])) {
                 foreach ($marketsData['specials'] as $market) {
