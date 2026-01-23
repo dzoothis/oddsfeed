@@ -305,6 +305,19 @@ class LiveMatchSyncJob implements ShouldQueue
                     $existingMatch = $this->findDuplicateMatch($matchData);
                 }
 
+                // CRITICAL: Never overwrite matches that are already marked as finished
+                // This prevents LiveMatchSyncJob from resetting finished matches back to live
+                if ($existingMatch && ($existingMatch->live_status_id == 2 || $existingMatch->live_status_id == -1)) {
+                    Log::debug('Skipping update for finished match - preventing reset to live', [
+                        'match_id' => $matchData['id'],
+                        'existing_live_status_id' => $existingMatch->live_status_id,
+                        'pinnacle_live_status_id' => $matchData['live_status_id'] ?? 0,
+                        'home_team' => $matchData['home_team'],
+                        'away_team' => $matchData['away_team']
+                    ]);
+                    continue; // Skip finished matches - don't reset them to live
+                }
+
                 // Only update if match doesn't exist or key data changed
                 if (!$existingMatch || $this->hasLiveMatchChanged($existingMatch, $matchData)) {
                     // Validate match type transition (sportsbook safety rules)
@@ -336,27 +349,39 @@ class LiveMatchSyncJob implements ShouldQueue
                         ]);
                     }
 
-                    SportsMatch::updateOrCreate(
-                        $updateKey,
-                        [
-                            'homeTeam' => $matchData['home_team'],
-                            'awayTeam' => $matchData['away_team'],
-                            'home_team_id' => $matchData['home_team_id'],
-                            'away_team_id' => $matchData['away_team_id'],
-                            'sportId' => $matchData['sport_id'],
-                            'leagueId' => $matchData['league_id'],
-                            'startTime' => $scheduledTime,
-                            'eventType' => $matchData['match_type'], // Keep eventType for backward compatibility
-                            'match_type' => $matchData['match_type'], // Add match_type for consistency
-                            'live_status_id' => $matchData['live_status_id'], // Add live_status_id
-                            'betting_availability' => $matchData['betting_availability'] ?? 'prematch', // New betting availability status
-                            'hasOpenMarkets' => $matchData['has_open_markets'],
-                            'home_score' => $matchData['home_score'] ?? 0,
-                            'away_score' => $matchData['away_score'] ?? 0,
-                            'match_duration' => $matchData['match_duration'] ?? null,
-                            'lastUpdated' => $matchData['pinnacle_last_update'] ? \Carbon\Carbon::createFromTimestamp($matchData['pinnacle_last_update']) : now()
-                        ]
-                    );
+                    // Build update array - but preserve finished status if match is already finished
+                    $updateData = [
+                        'homeTeam' => $matchData['home_team'],
+                        'awayTeam' => $matchData['away_team'],
+                        'home_team_id' => $matchData['home_team_id'],
+                        'away_team_id' => $matchData['away_team_id'],
+                        'sportId' => $matchData['sport_id'],
+                        'leagueId' => $matchData['league_id'],
+                        'startTime' => $scheduledTime,
+                        'eventType' => $matchData['match_type'], // Keep eventType for backward compatibility
+                        'match_type' => $matchData['match_type'], // Add match_type for consistency
+                        'betting_availability' => $matchData['betting_availability'] ?? 'prematch', // New betting availability status
+                        'hasOpenMarkets' => $matchData['has_open_markets'],
+                        'home_score' => $matchData['home_score'] ?? 0,
+                        'away_score' => $matchData['away_score'] ?? 0,
+                        'match_duration' => $matchData['match_duration'] ?? null,
+                        'lastUpdated' => $matchData['pinnacle_last_update'] ? \Carbon\Carbon::createFromTimestamp($matchData['pinnacle_last_update']) : now()
+                    ];
+
+                    // CRITICAL: Only update live_status_id if match is NOT already finished
+                    // This prevents overwriting finished matches (live_status_id = 2 or -1)
+                    if (!$existingMatch || ($existingMatch->live_status_id != 2 && $existingMatch->live_status_id != -1)) {
+                        $updateData['live_status_id'] = $matchData['live_status_id'] ?? 0;
+                    } else {
+                        // Preserve finished status - don't let Pinnacle reset it to live
+                        Log::debug('Preserving finished status for match', [
+                            'match_id' => $matchData['id'],
+                            'preserved_live_status_id' => $existingMatch->live_status_id,
+                            'pinnacle_wanted_live_status_id' => $matchData['live_status_id'] ?? 0
+                        ]);
+                    }
+
+                    SportsMatch::updateOrCreate($updateKey, $updateData);
 
                     // Dispatch venue enrichment job if not already enriched
                     $this->dispatchVenueEnrichmentIfNeeded($matchData['id']);
@@ -1143,6 +1168,7 @@ class LiveMatchSyncJob implements ShouldQueue
                       });
                 })
                 ->where('lastUpdated', '<', now()->subMinutes(5)) // Not updated in last 5 minutes
+                ->whereRaw('startTime > DATE_SUB(NOW(), INTERVAL 4 HOUR)') // Only update matches that started within last 4 hours
                 ->where('sportId', $this->sportId ?? 1)
                 ->get();
 

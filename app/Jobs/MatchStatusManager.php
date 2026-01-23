@@ -113,6 +113,7 @@ class MatchStatusManager implements ShouldQueue
                 date('Y-m-d'), // Today
                 date('Y-m-d', strtotime('-1 day')), // Yesterday
                 date('Y-m-d', strtotime('-2 days')), // 2 days ago
+                date('Y-m-d', strtotime('-3 days')), // 3 days ago
             ];
 
             $finishedMatches = [];
@@ -188,7 +189,7 @@ class MatchStatusManager implements ShouldQueue
             $potentiallyFinishedMatches = SportsMatch::where('sportId', $this->sportId)
                 ->where('live_status_id', 0) // Not currently live
                 ->where('betting_availability', 'available_for_betting')
-                ->where('updated_at', '>', now()->subHours(48)) // Updated recently
+                ->where('lastUpdated', '>', now()->subHours(48)) // Updated recently
                 ->limit(100) // Process in batches
                 ->get();
 
@@ -196,11 +197,41 @@ class MatchStatusManager implements ShouldQueue
                 'matches_to_check' => $potentiallyFinishedMatches->count()
             ]);
 
+            // IMPROVED: Also check if match is in Pinnacle's current live feed
+            // If not in live feed, it's likely finished
+            $pinnacleLiveMatches = $pinnacleService->getMatchesByLeagues($this->sportId, [], 'live');
+            $pinnacleLiveIds = [];
+            foreach ($pinnacleLiveMatches as $pm) {
+                if (isset($pm['id'])) {
+                    $pinnacleLiveIds[] = $pm['id'];
+                }
+            }
+
             foreach ($potentiallyFinishedMatches as $match) {
                 $checkedCount++;
 
                 try {
-                    // Check if Pinnacle still offers markets for this match
+                    // First check: Is match in Pinnacle's current live feed?
+                    $inPinnacleLive = in_array($match->eventId, $pinnacleLiveIds);
+                    
+                    if (!$inPinnacleLive) {
+                        // Match not in Pinnacle live feed = likely finished
+                        Log::info('Match finished - not in Pinnacle live feed', [
+                            'match_id' => $match->eventId,
+                            'home_team' => $match->homeTeam,
+                            'away_team' => $match->awayTeam,
+                            'pinnacle_live_count' => count($pinnacleLiveIds)
+                        ]);
+
+                        // Mark as finished instead of deleting (safer)
+                        $match->markAsFinished();
+                        $removedCount++;
+
+                        $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
+                        continue; // Skip market check if not in live feed
+                    }
+
+                    // Second check: Check if Pinnacle still offers markets for this match
                     $hasMarkets = $this->checkPinnacleMarkets($pinnacleService, $match->eventId);
 
                     if (!$hasMarkets) {
@@ -211,7 +242,7 @@ class MatchStatusManager implements ShouldQueue
                             'away_team' => $match->awayTeam
                         ]);
 
-                        $match->delete();
+                        $match->markAsFinished();
                         $removedCount++;
 
                         $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
@@ -252,10 +283,32 @@ class MatchStatusManager implements ShouldQueue
             $thresholdHours = $this->aggressive ? 1 : 3; // More aggressive = shorter threshold
             $threshold = now()->subHours($thresholdHours);
 
-            // Find matches that are past their scheduled time
+            // GLOBAL FIX: Find ALL matches that need to be marked as finished
+            // Priority 1: Matches 48+ hours old with live_status_id = 1 - ALWAYS mark as finished
+            // Priority 2: Other old matches past threshold
             $pastDueMatches = SportsMatch::where('sportId', $this->sportId)
-                ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL ? HOUR)', [$thresholdHours])
-                ->where('betting_availability', '!=', 'live') // Not actively live
+                ->whereNotIn('live_status_id', [2, -1]) // Don't process already finished matches
+                ->where(function($q) use ($thresholdHours) {
+                    // PRIMARY: Catch ALL matches 48+ hours old with live_status_id = 1
+                    // This is the global fix - no exceptions, no conditions
+                    $q->where(function($subQ) {
+                        $subQ->where('live_status_id', '=', 1)
+                             ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 48 HOUR)');
+                    })
+                    // SECONDARY: Other old matches past threshold
+                    ->orWhere(function($subQ) use ($thresholdHours) {
+                        $subQ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL ? HOUR)', [$thresholdHours])
+                             ->where(function($innerQ) {
+                                $innerQ->where('betting_availability', '!=', 'live') // Not actively live
+                                      ->orWhere(function($staleQ) {
+                                          // Matches with live_status_id = 1 that are old and stale
+                                          $staleQ->where('live_status_id', '=', 1)
+                                                 ->where('lastUpdated', '<', now()->subHours(2)); // Not updated in last 2 hours
+                                      });
+                             });
+                    });
+                })
+                ->orderBy('startTime', 'asc') // Process oldest matches first
                 ->get();
 
             Log::info('Time-based cleanup check', [
@@ -266,8 +319,22 @@ class MatchStatusManager implements ShouldQueue
             foreach ($pastDueMatches as $match) {
                 $checkedCount++;
 
-                $scheduledTime = strtotime($match->startTime);
-                $hoursPast = (time() - $scheduledTime) / 3600;
+                try {
+                    // Special logging for specific problematic matches
+                    if ($match->eventId == 1622668279 || 
+                        (stripos($match->homeTeam, 'Tijuana') !== false && stripos($match->awayTeam, 'Juarez') !== false)) {
+                        Log::info('Processing specific match in time-based cleanup', [
+                            'match_id' => $match->eventId,
+                            'home_team' => $match->homeTeam,
+                            'away_team' => $match->awayTeam,
+                            'live_status_id' => $match->live_status_id,
+                            'betting_availability' => $match->betting_availability,
+                            'startTime' => $match->startTime
+                        ]);
+                    }
+
+                    $scheduledTime = strtotime($match->startTime);
+                    $hoursPast = (time() - $scheduledTime) / 3600;
 
                 // Calculate confidence score for removal
                 $confidence = 0;
@@ -292,32 +359,63 @@ class MatchStatusManager implements ShouldQueue
                     $reasons[] = 'available_but_not_live';
                 }
 
+                // High confidence if marked as live but very old and not updated
+                if ($match->live_status_id == 1 && $hoursPast > 3 && $hoursSinceUpdate > 2) {
+                    $confidence += 30;
+                    $reasons[] = 'marked_live_but_old_and_stale';
+                }
+
+                // CRITICAL: Matches that are 48+ hours old and marked as live should ALWAYS be finished
+                // This catches matches that are being continuously updated but are clearly finished
+                if ($match->live_status_id == 1 && $hoursPast > 48) {
+                    $confidence += 50; // Very high confidence - override other factors
+                    $reasons[] = 'marked_live_but_48h_old';
+                }
+
                 // Determine action based on league coverage and confidence
                 $shouldMarkFinished = false;
                 $shouldMarkSoftFinished = false;
                 $action = 'none';
 
-                // Get league coverage type
-                $leagueCoverage = $this->getLeagueCoverage($match);
+                // CRITICAL FIX: For matches 48+ hours old with live_status_id = 1, ALWAYS mark as finished
+                // Also mark matches 24+ hours old if they haven't been updated recently
+                // This bypasses league coverage check to ensure these matches are caught automatically
+                $leagueCoverage = 'regional'; // Default
+                if ($match->live_status_id == 1 && $hoursPast > 48) {
+                    // Force mark as finished regardless of league coverage - these are definitely finished
+                    $shouldMarkFinished = true;
+                    $action = 'finished_48h_old_forced';
+                    $confidence = 100; // Set to max to ensure it's processed
+                    $leagueCoverage = 'forced_48h_old'; // Special marker
+                } elseif ($match->live_status_id == 1 && $hoursPast > 24 && $hoursSinceUpdate > 12) {
+                    // Matches 24+ hours old that haven't been updated in 12+ hours - likely finished
+                    $shouldMarkFinished = true;
+                    $action = 'finished_24h_old_stale';
+                    $confidence = 80;
+                    $leagueCoverage = 'forced_24h_old_stale';
+                } else {
+                    // Get league coverage type for other matches
+                    $leagueCoverage = $this->getLeagueCoverage($match);
 
-                if ($confidence >= 30) {
-                    // High confidence - decide based on league coverage
-                    if ($leagueCoverage === 'major') {
-                        $shouldMarkFinished = true;
-                        $action = 'finished';
-                    } else {
-                        // Regional or unknown leagues get soft_finished
-                        $shouldMarkSoftFinished = true;
-                        $action = 'soft_finished';
-                    }
-                } elseif ($this->aggressive && $confidence >= 15) {
-                    // Aggressive mode with lower threshold - same logic
-                    if ($leagueCoverage === 'major') {
-                        $shouldMarkFinished = true;
-                        $action = 'finished_aggressive';
-                    } else {
-                        $shouldMarkSoftFinished = true;
-                        $action = 'soft_finished_aggressive';
+                    if ($confidence >= 30) {
+                        // High confidence - decide based on league coverage
+                        if ($leagueCoverage === 'major') {
+                            $shouldMarkFinished = true;
+                            $action = 'finished';
+                        } else {
+                            // Regional or unknown leagues get soft_finished
+                            $shouldMarkSoftFinished = true;
+                            $action = 'soft_finished';
+                        }
+                    } elseif ($this->aggressive && $confidence >= 15) {
+                        // Aggressive mode with lower threshold - same logic
+                        if ($leagueCoverage === 'major') {
+                            $shouldMarkFinished = true;
+                            $action = 'finished_aggressive';
+                        } else {
+                            $shouldMarkSoftFinished = true;
+                            $action = 'soft_finished_aggressive';
+                        }
                     }
                 }
 
@@ -336,15 +434,71 @@ class MatchStatusManager implements ShouldQueue
                         'aggressive_mode' => $this->aggressive
                     ]);
 
-                    if ($shouldMarkFinished) {
-                        $match->markAsFinished();
-                        $removedCount++;
-                    } elseif ($shouldMarkSoftFinished) {
-                        $match->markAsSoftFinished();
-                        $removedCount++; // Count as "removed" from active status
-                    }
+                    try {
+                        if ($shouldMarkFinished) {
+                            $result = $match->markAsFinished();
+                            if ($result) {
+                                $removedCount++;
+                                Log::info('Match marked as finished successfully', [
+                                    'match_id' => $match->eventId,
+                                    'home_team' => $match->homeTeam,
+                                    'away_team' => $match->awayTeam
+                                ]);
+                            } else {
+                                Log::warning('Failed to mark match as finished', [
+                                    'match_id' => $match->eventId
+                                ]);
+                            }
+                        } elseif ($shouldMarkSoftFinished) {
+                            $result = $match->markAsSoftFinished();
+                            if ($result) {
+                                $removedCount++; // Count as "removed" from active status
+                                Log::info('Match marked as soft finished successfully', [
+                                    'match_id' => $match->eventId,
+                                    'home_team' => $match->homeTeam,
+                                    'away_team' => $match->awayTeam
+                                ]);
+                            } else {
+                                Log::warning('Failed to mark match as soft finished', [
+                                    'match_id' => $match->eventId
+                                ]);
+                            }
+                        }
 
-                    $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
+                        $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
+                    } catch (\Exception $e) {
+                        Log::error('Error marking match as finished', [
+                            'match_id' => $match->eventId,
+                            'home_team' => $match->homeTeam,
+                            'away_team' => $match->awayTeam,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                    }
+                } else {
+                    // Log why match wasn't marked as finished (for debugging)
+                    if ($match->eventId == 1622668279 || 
+                        (stripos($match->homeTeam, 'Tijuana') !== false && stripos($match->awayTeam, 'Juarez') !== false)) {
+                        Log::info('Match NOT marked as finished - conditions not met', [
+                            'match_id' => $match->eventId,
+                            'confidence' => $confidence,
+                            'threshold' => $this->aggressive ? 15 : 30,
+                            'reasons' => implode(', ', $reasons),
+                            'hours_past' => round($hoursPast, 1),
+                            'live_status_id' => $match->live_status_id
+                        ]);
+                    }
+                }
+                } catch (\Exception $e) {
+                    // Catch any exception during match processing to prevent stopping the entire loop
+                    Log::error('Error processing match in time-based cleanup', [
+                        'match_id' => $match->eventId ?? 'unknown',
+                        'home_team' => $match->homeTeam ?? 'unknown',
+                        'away_team' => $match->awayTeam ?? 'unknown',
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    continue; // Continue with next match instead of stopping
                 }
             }
 
@@ -374,7 +528,7 @@ class MatchStatusManager implements ShouldQueue
             $threshold = now()->subHours($staleThreshold);
 
             $staleMatches = SportsMatch::where('sportId', $this->sportId)
-                ->where('updated_at', '<', $threshold)
+                ->where('lastUpdated', '<', $threshold)
                 ->where('betting_availability', '!=', 'live')
                 ->get();
 
@@ -388,8 +542,8 @@ class MatchStatusManager implements ShouldQueue
                     'match_id' => $match->eventId,
                     'home_team' => $match->homeTeam,
                     'away_team' => $match->awayTeam,
-                    'last_updated' => $match->updated_at,
-                    'hours_stale' => round((time() - strtotime($match->updated_at)) / 3600, 1)
+                    'last_updated' => $match->lastUpdated,
+                    'hours_stale' => round((time() - strtotime($match->lastUpdated)) / 3600, 1)
                 ]);
 
                 $match->delete();
@@ -464,16 +618,33 @@ class MatchStatusManager implements ShouldQueue
     private function removeMatchFromDatabase(string $homeTeam, string $awayTeam, string $reason): bool
     {
         try {
+            // Normalize team names for better matching (remove U20, U19, etc. and special chars)
+            $homeTeamNormalized = $this->normalizeTeamName($homeTeam);
+            $awayTeamNormalized = $this->normalizeTeamName($awayTeam);
+            
             // Use direct database query since the table structure is non-standard
             $match = DB::table('matches')
                 ->where('sportId', $this->sportId)
-                ->where(function($query) use ($homeTeam, $awayTeam) {
+                ->where(function($query) use ($homeTeam, $awayTeam, $homeTeamNormalized, $awayTeamNormalized) {
+                    // Try exact match first
                     $query->where(function($q) use ($homeTeam, $awayTeam) {
                         $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
                           ->where('awayTeam', 'like', '%' . $awayTeam . '%');
-                    })->orWhere(function($q) use ($homeTeam, $awayTeam) {
+                    })
+                    // Try reversed
+                    ->orWhere(function($q) use ($homeTeam, $awayTeam) {
                         $q->where('homeTeam', 'like', '%' . $awayTeam . '%')
                           ->where('awayTeam', 'like', '%' . $homeTeam . '%');
+                    })
+                    // Try normalized matching (handles U20 variations)
+                    ->orWhere(function($q) use ($homeTeamNormalized, $awayTeamNormalized) {
+                        $q->whereRaw('LOWER(REPLACE(REPLACE(REPLACE(REPLACE(homeTeam, " ", ""), "-", ""), "U20", ""), "U19", "")) LIKE ?', ['%' . $homeTeamNormalized . '%'])
+                          ->whereRaw('LOWER(REPLACE(REPLACE(REPLACE(REPLACE(awayTeam, " ", ""), "-", ""), "U20", ""), "U19", "")) LIKE ?', ['%' . $awayTeamNormalized . '%']);
+                    })
+                    // Try normalized reversed
+                    ->orWhere(function($q) use ($homeTeamNormalized, $awayTeamNormalized) {
+                        $q->whereRaw('LOWER(REPLACE(REPLACE(REPLACE(REPLACE(homeTeam, " ", ""), "-", ""), "U20", ""), "U19", "")) LIKE ?', ['%' . $awayTeamNormalized . '%'])
+                          ->whereRaw('LOWER(REPLACE(REPLACE(REPLACE(REPLACE(awayTeam, " ", ""), "-", ""), "U20", ""), "U19", "")) LIKE ?', ['%' . $homeTeamNormalized . '%']);
                     });
                 })
                 ->first();
@@ -580,9 +751,16 @@ class MatchStatusManager implements ShouldQueue
 
     /**
      * Normalize team name for matching
+     * Removes common suffixes like U20, U19, U21, etc. and special characters
      */
     private function normalizeTeamName(string $name): string
     {
-        return strtolower(preg_replace('/[^a-z0-9]/', '', $name));
+        // Remove common age group suffixes (U20, U19, U21, etc.) first
+        $name = preg_replace('/\s*U\d+\s*/i', '', $name);
+        // Remove all non-alphanumeric characters and convert to lowercase
+        // Keep spaces temporarily, then remove them
+        $name = strtolower($name);
+        $name = preg_replace('/[^a-z0-9]/', '', $name);
+        return $name;
     }
 }

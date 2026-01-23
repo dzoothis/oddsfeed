@@ -73,9 +73,9 @@ class Kernel extends ConsoleKernel
             ->name('finished-match-pinnacle-verification');
 
         // Layer 3: Time-Based Cleanup (Fallback - 95% Coverage)
-        // Runs hourly to remove matches significantly past their scheduled time
-        $schedule->job(new MatchStatusManager('time_based_cleanup'))
-            ->hourly()
+        // Runs every 15 minutes to catch finished matches faster
+        $schedule->job(new MatchStatusManager('time_based_cleanup', null, true)) // Aggressive mode
+            ->everyFifteenMinutes()
             ->name('finished-match-time-based-cleanup');
 
         // Layer 4: Staleness Detection (Safety Net - 100% Coverage)
@@ -85,9 +85,9 @@ class Kernel extends ConsoleKernel
             ->name('finished-match-stale-data-purge');
 
         // Comprehensive Check: All Layers Combined
-        // Runs every 30 minutes for thorough cleanup
-        $schedule->job(new MatchStatusManager('comprehensive_check'))
-            ->everyThirtyMinutes()
+        // Runs every 15 minutes in aggressive mode for faster cleanup
+        $schedule->job(new MatchStatusManager('comprehensive_check', null, true)) // Aggressive mode
+            ->everyFifteenMinutes()
             ->name('finished-match-comprehensive-check');
     }
 

@@ -218,8 +218,9 @@ class MatchesController extends Controller
 
             $query = SportsMatch::with('league')
                 ->where('sportId', $sportId)
-                ->where('lastUpdated', '>', now()->subHours(24))
-                ->orderBy('startTime', 'asc');
+                ->where('lastUpdated', '>', now()->subHours(24));
+            
+            // Note: Sorting will be applied after matchType conditions are set
 
             if (!empty($leagueIds)) {
                 $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
@@ -233,12 +234,28 @@ class MatchesController extends Controller
                           $q->where('live_status_id', '>', 0)
                             ->orWhere('home_score', '>', 0)
                             ->orWhere('away_score', '>', 0);
+                      })
+                      // Exclude matches that are likely finished:
+                      // 1. Matches that started more than 4 hours ago AND haven't been updated in the last 30 minutes
+                      // 2. Matches that started more than 3 hours ago AND have scores but no recent updates
+                      ->where(function($q) {
+                          $q->where(function($subQ) {
+                              // Matches updated recently (within last 30 minutes) are considered active
+                              $subQ->where('lastUpdated', '>', now()->subMinutes(30));
+                          })->orWhere(function($subQ) {
+                              // OR matches that started within the last 3 hours (likely still live)
+                              $subQ->where('startTime', '>', now()->subHours(3));
+                          })->orWhere(function($subQ) {
+                              // OR matches with live_status_id = 1 (confirmed live by Pinnacle) that started within last 4 hours
+                              $subQ->where('live_status_id', '=', 1)
+                                   ->where('startTime', '>', now()->subHours(4));
+                          });
                       });
             } elseif ($matchType === 'prematch') {
                 $query->where('eventType', 'prematch')
                       ->where('betting_availability', '!=', 'available_for_betting')
                       ->where('startTime', '>', \Carbon\Carbon::now())
-                      ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))');
+                      ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 2 DAY))');
             } elseif ($matchType === 'available_for_betting') {
                 $query->where('betting_availability', 'available_for_betting')
                       ->where('live_status_id', '!=', -1)
@@ -256,10 +273,10 @@ class MatchesController extends Controller
                         $liveQ->where('live_status_id', '>', 0)
                               ->whereRaw('DATE(startTime) <= DATE(NOW())'); // Live matches should not be in the future
                     })
-                    // OR include prematch matches with open markets within 24 hours
+                    // OR include prematch matches with open markets within 2 days
                     ->orWhere(function($subQ) {
                         $subQ->where('hasOpenMarkets', true)
-                             ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 1 DAY))')
+                             ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 2 DAY))')
                              ->where('startTime', '>', \Carbon\Carbon::now()); // Future matches only
                     });
                 });
@@ -270,11 +287,28 @@ class MatchesController extends Controller
                 $query->whereRaw('(startTime IS NULL OR startTime > DATE_SUB(NOW(), INTERVAL 150 MINUTE))');
             }
 
+            // Apply sorting based on match type
+            // For live matches: Most recent first (most recently updated, then most recently started)
+            // For prematch: Earliest matches first
+            if ($matchType === 'live') {
+                $query->orderBy('lastUpdated', 'desc')
+                      ->orderBy('startTime', 'desc');
+            } elseif ($matchType === 'all') {
+                // For 'all': Live matches first (most recent), then prematch (earliest)
+                $query->orderByRaw('CASE WHEN live_status_id > 0 THEN 0 ELSE 1 END') // Live matches first
+                      ->orderBy('lastUpdated', 'desc') // Most recently updated first
+                      ->orderBy('startTime', 'desc'); // Most recently started first
+            } else {
+                // Prematch: Earliest matches first
+                $query->orderBy('startTime', 'asc');
+            }
+
             Log::debug('Matches query filters applied', [
                 'sportId' => $sportId,
                 'matchType' => $matchType,
                 'leagueIds' => $leagueIds,
-                'exclude_finished_matches' => true
+                'exclude_finished_matches' => true,
+                'sort_order' => $matchType === 'live' ? 'most_recent_first' : ($matchType === 'all' ? 'live_first_then_prematch' : 'earliest_first')
             ]);
 
             $matches = $query->get();
