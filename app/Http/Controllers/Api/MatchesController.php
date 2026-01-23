@@ -966,7 +966,11 @@ class MatchesController extends Controller
                 'marketType' => $marketType
             ]);
 
-            $marketsData = $this->pinnacleApi->getSpecialMarkets('prematch', $sportId);
+            // Get the match to determine event type (live or prematch)
+            $match = SportsMatch::where('eventId', $matchId)->first();
+            $eventType = $match && $match->eventType === 'live' ? 'live' : 'prematch';
+
+            $marketsData = $this->pinnacleApi->getSpecialMarkets($eventType, $sportId);
 
             $oddsData = $this->processMatchOdds($marketsData, $matchId, $period, $marketType);
 
@@ -1345,6 +1349,65 @@ class MatchesController extends Controller
                         'period' => rand(0, 2) === 0 ? 'Game' : (rand(0, 1) ? '1st Half' : '1st Quarter'),
                         'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
                     ];
+                }
+            }
+
+            // Generate sample data for Totals market
+            if ($marketType === 'totals' || $marketType === 'all') {
+                $totalLines = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5];
+                foreach ($totalLines as $line) {
+                    $allOdds[] = [
+                        'bet' => 'Over ' . $line,
+                        'home_team_id' => $homeTeamId,
+                        'away_team_id' => $awayTeamId,
+                        'line' => (string)$line,
+                        'odds' => number_format(rand(180, 220) / 100, 3),
+                        'status' => 'open',
+                        'period' => 'Game',
+                        'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                    ];
+                    $allOdds[] = [
+                        'bet' => 'Under ' . $line,
+                        'home_team_id' => $homeTeamId,
+                        'away_team_id' => $awayTeamId,
+                        'line' => (string)$line,
+                        'odds' => number_format(rand(180, 220) / 100, 3),
+                        'status' => 'open',
+                        'period' => 'Game',
+                        'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                    ];
+                }
+            }
+
+            // Generate sample data for Player Props market
+            if ($marketType === 'player_props' || $marketType === 'all') {
+                $playerNames = ['Player A', 'Player B', 'Player C', 'Player D'];
+                $propTypes = ['Goals', 'Assists', 'Points', 'Rebounds', 'Shots'];
+                
+                foreach ($playerNames as $playerName) {
+                    foreach ($propTypes as $propType) {
+                        $line = rand(5, 25);
+                        $allOdds[] = [
+                            'bet' => $playerName . ' - ' . $propType . ' Over ' . $line,
+                            'home_team_id' => $homeTeamId,
+                            'away_team_id' => $awayTeamId,
+                            'line' => (string)$line,
+                            'odds' => number_format(rand(180, 220) / 100, 3),
+                            'status' => 'open',
+                            'period' => 'Game',
+                            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                        ];
+                        $allOdds[] = [
+                            'bet' => $playerName . ' - ' . $propType . ' Under ' . $line,
+                            'home_team_id' => $homeTeamId,
+                            'away_team_id' => $awayTeamId,
+                            'line' => (string)$line,
+                            'odds' => number_format(rand(180, 220) / 100, 3),
+                            'status' => 'open',
+                            'period' => 'Game',
+                            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
+                        ];
+                    }
                 }
             }
         }
