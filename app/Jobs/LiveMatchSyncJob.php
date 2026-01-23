@@ -111,18 +111,10 @@ class LiveMatchSyncJob implements ShouldQueue
             // Step 4: Update database selectively (only changed matches)
             $this->updateDatabaseSelectively($processedMatches);
 
-        // Update all existing matches with live_status_id = 1 to available_for_betting
-        // This ensures matches that are available for betting get the correct status
-        // even if they weren't in the current Pinnacle response
-        $availableForBettingUpdated = SportsMatch::where('live_status_id', 1)
-            ->where('betting_availability', '!=', 'live') // Don't override actual live matches
-            ->update(['betting_availability' => 'available_for_betting']);
-
-        if ($availableForBettingUpdated > 0) {
-            Log::info('Updated existing matches to available_for_betting', [
-                'updated_count' => $availableForBettingUpdated
-            ]);
-        }
+        // REMOVED: available_for_betting update logic
+        // This was causing old matches to be updated every minute, preventing cleanup
+        // Frontend only uses "live" and "prematch" filters, so this is not needed
+        // Old matches will now be properly cleaned up by MatchStatusManager
 
         // Remove finished matches from database
         $finishedMatchesRemoved = $this->removeFinishedMatches($apiFootballService);
@@ -136,7 +128,6 @@ class LiveMatchSyncJob implements ShouldQueue
         Log::info('LiveMatchSyncJob completed successfully', [
             'processed_matches' => count($processedMatches),
             'leagues_updated' => count($matchesByLeague),
-            'available_for_betting_updated' => $availableForBettingUpdated,
             'finished_matches_removed' => $finishedMatchesRemoved,
             'duplicates_cleaned' => $duplicatesCleaned,
             'live_visible_timestamps_updated' => $timestampsUpdated

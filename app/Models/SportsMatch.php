@@ -110,7 +110,8 @@ class SportsMatch extends Model
     public function markAsSoftFinished(): bool
     {
         $this->live_status_id = self::STATUS_SOFT_FINISHED;
-        $this->betting_availability = 'finished'; // Mark as finished (shorter value for DB column)
+        // Don't set betting_availability - it's an enum and 'finished' is not a valid value
+        // Only live_status_id = -1 is needed to mark as finished
         $this->lastUpdated = now();
         return $this->save();
     }

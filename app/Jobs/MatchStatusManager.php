@@ -284,29 +284,20 @@ class MatchStatusManager implements ShouldQueue
             $threshold = now()->subHours($thresholdHours);
 
             // GLOBAL FIX: Find ALL matches that need to be marked as finished
-            // Priority 1: Matches 48+ hours old with live_status_id = 1 - ALWAYS mark as finished
-            // Priority 2: Other old matches past threshold
+            // ULTRA-AGGRESSIVE: Catch ALL matches 24+ hours old - NO EXCEPTIONS
+            // This ensures matches are automatically marked as finished without manual intervention
             $pastDueMatches = SportsMatch::where('sportId', $this->sportId)
                 ->whereNotIn('live_status_id', [2, -1]) // Don't process already finished matches
-                ->where(function($q) use ($thresholdHours) {
-                    // PRIMARY: Catch ALL matches 48+ hours old with live_status_id = 1
-                    // This is the global fix - no exceptions, no conditions
-                    $q->where(function($subQ) {
-                        $subQ->where('live_status_id', '=', 1)
-                             ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 48 HOUR)');
-                    })
-                    // SECONDARY: Other old matches past threshold
-                    ->orWhere(function($subQ) use ($thresholdHours) {
-                        $subQ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL ? HOUR)', [$thresholdHours])
-                             ->where(function($innerQ) {
-                                $innerQ->where('betting_availability', '!=', 'live') // Not actively live
-                                      ->orWhere(function($staleQ) {
-                                          // Matches with live_status_id = 1 that are old and stale
-                                          $staleQ->where('live_status_id', '=', 1)
-                                                 ->where('lastUpdated', '<', now()->subHours(2)); // Not updated in last 2 hours
-                                      });
-                             });
-                    });
+                ->where(function($q) {
+                    // PRIMARY: Catch ALL matches 48+ hours old - ANY status except finished
+                    // This is the global fix - no exceptions, no conditions, no status checks
+                    $q->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 48 HOUR)')
+                    // SECONDARY: Catch ALL matches 24+ hours old - ANY status except finished
+                    // Removed ALL conditions - 24h+ matches are definitely finished
+                      ->orWhere(function($subQ) {
+                          $subQ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 24 HOUR)')
+                               ->whereRaw('startTime >= DATE_SUB(NOW(), INTERVAL 48 HOUR)');
+                      });
                 })
                 ->orderBy('startTime', 'asc') // Process oldest matches first
                 ->get();
@@ -377,22 +368,23 @@ class MatchStatusManager implements ShouldQueue
                 $shouldMarkSoftFinished = false;
                 $action = 'none';
 
-                // CRITICAL FIX: For matches 48+ hours old with live_status_id = 1, ALWAYS mark as finished
-                // Also mark matches 24+ hours old if they haven't been updated recently
-                // This bypasses league coverage check to ensure these matches are caught automatically
+                // GLOBAL FIX: For ALL matches 24+ hours old, ALWAYS mark as finished
+                // NO EXCEPTIONS - NO CONDITIONS - NO STATUS CHECKS
+                // This ensures automatic cleanup without manual intervention
                 $leagueCoverage = 'regional'; // Default
-                if ($match->live_status_id == 1 && $hoursPast > 48) {
-                    // Force mark as finished regardless of league coverage - these are definitely finished
+                if ($hoursPast > 48) {
+                    // Force mark as finished regardless of ANY condition - 48h+ matches are definitely finished
                     $shouldMarkFinished = true;
                     $action = 'finished_48h_old_forced';
                     $confidence = 100; // Set to max to ensure it's processed
                     $leagueCoverage = 'forced_48h_old'; // Special marker
-                } elseif ($match->live_status_id == 1 && $hoursPast > 24 && $hoursSinceUpdate > 12) {
-                    // Matches 24+ hours old that haven't been updated in 12+ hours - likely finished
+                } elseif ($hoursPast > 24) {
+                    // Matches 24+ hours old are definitely finished - mark immediately
+                    // NO CONDITIONS - NO STATUS CHECKS - NO LASTUPDATED CHECKS
                     $shouldMarkFinished = true;
-                    $action = 'finished_24h_old_stale';
-                    $confidence = 80;
-                    $leagueCoverage = 'forced_24h_old_stale';
+                    $action = 'finished_24h_old_forced';
+                    $confidence = 100; // Maximum confidence - 24h+ matches are definitely finished
+                    $leagueCoverage = 'forced_24h_old';
                 } else {
                     // Get league coverage type for other matches
                     $leagueCoverage = $this->getLeagueCoverage($match);
