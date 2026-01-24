@@ -36,6 +36,7 @@ class OddsSyncJob implements ShouldQueue
         $this->matchIds = $matchIds;
         $this->forceRefresh = $forceRefresh;
         $this->jobId = uniqid('odds_sync_', true);
+        $this->onQueue('odds-sync');
     }
 
     /**

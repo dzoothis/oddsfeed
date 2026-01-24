@@ -37,6 +37,7 @@ class PrematchSyncJob implements ShouldQueue
         $this->sportId = $sportId;
         $this->leagueIds = $leagueIds;
         $this->jobId = uniqid('prematch_sync_', true);
+        $this->onQueue('prematch-sync');
     }
 
     /**
