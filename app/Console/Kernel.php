@@ -16,10 +16,64 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        $schedule->job(new LiveMatchSyncJob())
+        // Sync live matches for all sports
+        // CRITICAL FIX: Explicitly set sportId for ALL sports to prevent defaulting to sportId=7 (NFL)
+        // Previously, if sportId was not specified, it would default to NFL, causing Soccer matches to be missed
+        
+        $schedule->job(new LiveMatchSyncJob(1)) // Soccer
             ->everyMinute()
             ->withoutOverlapping()
-            ->name('live-match-sync');
+            ->name('live-match-sync-soccer');
+        
+        $schedule->job(new LiveMatchSyncJob(2)) // Tennis
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-tennis');
+        
+        $schedule->job(new LiveMatchSyncJob(3)) // Basketball
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-basketball');
+
+        $schedule->job(new LiveMatchSyncJob(4)) // Hockey
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-hockey');
+
+        $schedule->job(new LiveMatchSyncJob(5)) // Volleyball
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-volleyball');
+
+        $schedule->job(new LiveMatchSyncJob(6)) // Handball
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-handball');
+
+        $schedule->job(new LiveMatchSyncJob(7)) // American Football
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-american-football');
+
+        $schedule->job(new LiveMatchSyncJob(8)) // Mixed Martial Arts
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-mma');
+
+        $schedule->job(new LiveMatchSyncJob(9)) // Baseball
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-baseball');
+
+        $schedule->job(new LiveMatchSyncJob(10)) // E Sports
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-esports');
+
+        $schedule->job(new LiveMatchSyncJob(11)) // Cricket
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('live-match-sync-cricket');
 
         $schedule->job(new OddsSyncJob())
             ->everyMinute()

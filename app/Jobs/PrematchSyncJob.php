@@ -212,64 +212,47 @@ class PrematchSyncJob implements ShouldQueue
     }
 
     /**
-     * Filter matches by available leagues in database
-     * Ensures all imported leagues are eligible for sync, not just requested ones
+     * Filter matches by available leagues
+     * IMPROVED: Include all leagues from Pinnacle, not just those in database
+     * Only filter if specific leagues are requested
      */
     private function filterMatchesByAvailableLeagues(array $matches, int $sportId, array $requestedLeagueIds): array
     {
-        // Get all active leagues for this sport from database
-        $availableLeagues = \App\Models\League::where('sportId', $sportId)
-            ->where('isActive', true)
-            ->pluck('pinnacleId')
-            ->toArray();
-
-        if (empty($availableLeagues)) {
-            Log::warning('No active leagues found in database for sport', [
-                'sport_id' => $sportId,
-                'total_matches_from_api' => count($matches)
-            ]);
-            return [];
-        }
-
-        Log::debug('Available leagues for filtering', [
-            'sport_id' => $sportId,
-            'available_leagues_count' => count($availableLeagues),
-            'requested_leagues_count' => count($requestedLeagueIds),
-            'sample_available_leagues' => array_slice($availableLeagues, 0, 5)
-        ]);
-
-        // If specific leagues were requested, filter to those (if they exist in database)
+        // CRITICAL FIX: Include ALL leagues from Pinnacle, not just those in database
+        // This ensures new leagues and inactive leagues are included
+        // Only filter if specific leagues are explicitly requested
+        
         if (!empty($requestedLeagueIds)) {
-            $validRequestedLeagues = array_intersect($requestedLeagueIds, $availableLeagues);
-            if (empty($validRequestedLeagues)) {
-                Log::info('No valid requested leagues found in database', [
-                    'sport_id' => $sportId,
-                    'requested_leagues' => $requestedLeagueIds,
-                    'available_leagues_sample' => array_slice($availableLeagues, 0, 5)
-                ]);
-                return [];
-            }
-            $leaguesToInclude = $validRequestedLeagues;
-        } else {
-            // No specific leagues requested - include all available leagues
-            $leaguesToInclude = $availableLeagues;
+            // Specific leagues requested - filter to those leagues
+            $filteredMatches = array_filter($matches, function($match) use ($requestedLeagueIds) {
+                $matchLeagueId = $match['league_id'] ?? null;
+                return $matchLeagueId && in_array($matchLeagueId, $requestedLeagueIds);
+            });
+
+            Log::info('League filtering completed (specific leagues requested)', [
+                'sport_id' => $sportId,
+                'original_matches' => count($matches),
+                'filtered_matches' => count($filteredMatches),
+                'leagues_requested' => count($requestedLeagueIds),
+                'leagues_requested_list' => $requestedLeagueIds
+            ]);
+
+            return array_values($filteredMatches); // Re-index array
         }
 
-        // Filter matches to only include those from available leagues
-        $filteredMatches = array_filter($matches, function($match) use ($leaguesToInclude) {
-            $matchLeagueId = $match['league_id'] ?? null;
-            return $matchLeagueId && in_array($matchLeagueId, $leaguesToInclude);
-        });
-
-        Log::info('League filtering completed', [
+        // No specific leagues requested - include ALL matches from Pinnacle
+        // This maximizes coverage and includes new/inactive leagues
+        $uniqueLeagues = array_unique(array_filter(array_column($matches, 'league_id')));
+        
+        Log::info('League filtering completed (all leagues included)', [
             'sport_id' => $sportId,
-            'original_matches' => count($matches),
-            'filtered_matches' => count($filteredMatches),
-            'leagues_used' => count($leaguesToInclude),
-            'leagues_requested' => count($requestedLeagueIds)
+            'total_matches' => count($matches),
+            'unique_leagues_count' => count($uniqueLeagues),
+            'note' => 'All Pinnacle leagues included - no database filtering applied'
         ]);
 
-        return array_values($filteredMatches); // Re-index array
+        // Return all matches - no filtering
+        return $matches;
     }
 
     /**

@@ -324,8 +324,8 @@ class MatchStatusManager implements ShouldQueue
                         ]);
                     }
 
-                    $scheduledTime = strtotime($match->startTime);
-                    $hoursPast = (time() - $scheduledTime) / 3600;
+                $scheduledTime = strtotime($match->startTime);
+                $hoursPast = (time() - $scheduledTime) / 3600;
 
                 // Calculate confidence score for removal
                 $confidence = 0;
@@ -387,26 +387,26 @@ class MatchStatusManager implements ShouldQueue
                     $leagueCoverage = 'forced_24h_old';
                 } else {
                     // Get league coverage type for other matches
-                    $leagueCoverage = $this->getLeagueCoverage($match);
+                $leagueCoverage = $this->getLeagueCoverage($match);
 
-                    if ($confidence >= 30) {
-                        // High confidence - decide based on league coverage
-                        if ($leagueCoverage === 'major') {
-                            $shouldMarkFinished = true;
-                            $action = 'finished';
-                        } else {
-                            // Regional or unknown leagues get soft_finished
-                            $shouldMarkSoftFinished = true;
-                            $action = 'soft_finished';
-                        }
-                    } elseif ($this->aggressive && $confidence >= 15) {
-                        // Aggressive mode with lower threshold - same logic
-                        if ($leagueCoverage === 'major') {
-                            $shouldMarkFinished = true;
-                            $action = 'finished_aggressive';
-                        } else {
-                            $shouldMarkSoftFinished = true;
-                            $action = 'soft_finished_aggressive';
+                if ($confidence >= 30) {
+                    // High confidence - decide based on league coverage
+                    if ($leagueCoverage === 'major') {
+                        $shouldMarkFinished = true;
+                        $action = 'finished';
+                    } else {
+                        // Regional or unknown leagues get soft_finished
+                        $shouldMarkSoftFinished = true;
+                        $action = 'soft_finished';
+                    }
+                } elseif ($this->aggressive && $confidence >= 15) {
+                    // Aggressive mode with lower threshold - same logic
+                    if ($leagueCoverage === 'major') {
+                        $shouldMarkFinished = true;
+                        $action = 'finished_aggressive';
+                    } else {
+                        $shouldMarkSoftFinished = true;
+                        $action = 'soft_finished_aggressive';
                         }
                     }
                 }
@@ -427,10 +427,10 @@ class MatchStatusManager implements ShouldQueue
                     ]);
 
                     try {
-                        if ($shouldMarkFinished) {
+                    if ($shouldMarkFinished) {
                             $result = $match->markAsFinished();
                             if ($result) {
-                                $removedCount++;
+                        $removedCount++;
                                 Log::info('Match marked as finished successfully', [
                                     'match_id' => $match->eventId,
                                     'home_team' => $match->homeTeam,
@@ -441,10 +441,10 @@ class MatchStatusManager implements ShouldQueue
                                     'match_id' => $match->eventId
                                 ]);
                             }
-                        } elseif ($shouldMarkSoftFinished) {
+                    } elseif ($shouldMarkSoftFinished) {
                             $result = $match->markAsSoftFinished();
                             if ($result) {
-                                $removedCount++; // Count as "removed" from active status
+                        $removedCount++; // Count as "removed" from active status
                                 Log::info('Match marked as soft finished successfully', [
                                     'match_id' => $match->eventId,
                                     'home_team' => $match->homeTeam,
@@ -455,9 +455,9 @@ class MatchStatusManager implements ShouldQueue
                                     'match_id' => $match->eventId
                                 ]);
                             }
-                        }
+                    }
 
-                        $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
+                    $this->clearMatchFromCache($match->homeTeam, $match->awayTeam);
                     } catch (\Exception $e) {
                         Log::error('Error marking match as finished', [
                             'match_id' => $match->eventId,
