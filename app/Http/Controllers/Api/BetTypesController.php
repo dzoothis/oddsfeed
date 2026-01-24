@@ -164,9 +164,21 @@ class BetTypesController extends Controller
                 ->where('lastUpdated', '>', now()->subHours(24));
 
             if ($isLive) {
-                $query->where('eventType', 'live')->where('live_status_id', '>', 0);
+                // CRITICAL: Exclude finished matches (status 2) - ABSOLUTE, NO EXCEPTIONS
+                $threeHoursAgo = now()->subHours(3);
+                $query->where('eventType', 'live')
+                      ->where('live_status_id', '!=', -1)  // Exclude cancelled
+                      ->where('live_status_id', '!=', 2)     // Exclude finished - CRITICAL
+                      ->where('live_status_id', '=', 1)      // Only live matches
+                      ->where(function($q) use ($threeHoursAgo) {
+                          // Only matches that started within last 3 hours
+                          $q->where('startTime', '>=', $threeHoursAgo)
+                            ->orWhereNull('startTime');
+                      });
             } else {
-                $query->where('eventType', 'prematch');
+                $query->where('eventType', 'prematch')
+                      ->where('live_status_id', '!=', -1)  // Exclude cancelled
+                      ->where('live_status_id', '!=', 2);   // Exclude finished
             }
 
             $matches = $query->orderBy('startTime', 'asc')->get();

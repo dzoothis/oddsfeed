@@ -238,6 +238,27 @@ class MatchesController extends Controller
                 // Removed 24-hour lastUpdated filter to show all aggregated matches
                 // The aggregation system ensures we only show active matches
             
+            // CRITICAL: Filter out betting market matches (Corners, Cards, etc.)
+            // These are special markets, not real matches - they appear as duplicates
+            $query->where(function($q) {
+                $q->where('homeTeam', 'NOT LIKE', '%(Corners)%')
+                  ->where('awayTeam', 'NOT LIKE', '%(Corners)%')
+                  ->where('homeTeam', 'NOT LIKE', '%(Corner)%')
+                  ->where('awayTeam', 'NOT LIKE', '%(Corner)%')
+                  ->where('homeTeam', 'NOT LIKE', '%(Cards)%')
+                  ->where('awayTeam', 'NOT LIKE', '%(Cards)%')
+                  ->where('homeTeam', 'NOT LIKE', '%(Card)%')
+                  ->where('awayTeam', 'NOT LIKE', '%(Card)%');
+            });
+            
+            // Also filter by league name if it contains betting market keywords
+            $query->whereDoesntHave('league', function($q) {
+                $q->where('name', 'LIKE', '%Corners%')
+                  ->orWhere('name', 'LIKE', '%Corner%')
+                  ->orWhere('name', 'LIKE', '%Cards%')
+                  ->orWhere('name', 'LIKE', '%Card%');
+            });
+            
             // Note: Sorting will be applied after matchType conditions are set
 
             if (!empty($leagueIds)) {
@@ -246,16 +267,49 @@ class MatchesController extends Controller
             }
 
             if ($matchType === 'live') {
-                // MAXIMUM COVERAGE: Show ALL matches from aggregation system
-                // Trust the aggregation system - if it says live_status_id > 0, show it
-                // This is the UNION approach - show all matches from any provider
-                $query->where(function($q) {
-                    $q->where('live_status_id', '>', 0)
-                      ->orWhere('home_score', '>', 0)
-                      ->orWhere('away_score', '>', 0);
-                });
-                // REMOVED all time-based filters - trust aggregation system completely
-                // If aggregation says it's live, show it regardless of startTime or lastUpdated
+                // CRITICAL FIX: Auto-mark old matches as finished before querying
+                // Matches that started 3+ hours ago with live_status_id = 1 are definitely finished
+                // Soccer matches don't last 3+ hours - mark immediately
+                $threeHoursAgo = $utcNow->copy()->subHours(3);
+                \App\Models\SportsMatch::where('sportId', $sportId)
+                    ->where('live_status_id', 1) // Currently marked as live
+                    ->where('startTime', '<', $threeHoursAgo) // Started 3+ hours ago
+                    ->whereNotNull('startTime')
+                    ->update(['live_status_id' => 2]); // Mark as finished
+                
+                // CRITICAL: ABSOLUTE EXCLUSION of finished matches - NO EXCEPTIONS
+                // Finished matches (status 2) should NEVER appear in live feed, regardless of scores, time, or any other condition
+                $query->where('live_status_id', '!=', -1)  // Exclude cancelled
+                      ->where('live_status_id', '!=', 2)   // Exclude finished - ABSOLUTE, NO EXCEPTIONS
+                      ->where(function($q) use ($threeHoursAgo) {
+                          // Only include matches that are ACTUALLY live:
+                          // 1. Marked as live (status 1) AND started within last 3 hours
+                          $q->where(function($liveQ) use ($threeHoursAgo) {
+                              $liveQ->where('live_status_id', 1) // Must be marked as live
+                                    ->where(function($timeQ) use ($threeHoursAgo) {
+                                        // If marked as live, must have started within last 3 hours
+                                        // Soccer matches don't last 3+ hours
+                                        $timeQ->where(function($t) use ($threeHoursAgo) {
+                                            $t->where('startTime', '>=', $threeHoursAgo)
+                                              ->orWhereNull('startTime'); // Or no start time (can't determine age)
+                                        });
+                                    });
+                          })
+                          ->orWhere(function($scoreQ) use ($threeHoursAgo) {
+                              // Matches with scores but status 0 (might be live but not marked)
+                              // BUT also check they started recently (within 3 hours)
+                              $scoreQ->where('live_status_id', 0) // Not marked as live
+                                    ->where(function($s) {
+                                        $s->where('home_score', '>', 0)
+                                          ->orWhere('away_score', '>', 0);
+                                    })
+                                    ->where(function($t) use ($threeHoursAgo) {
+                                        // Must have started within last 3 hours
+                                        $t->where('startTime', '>=', $threeHoursAgo)
+                                          ->orWhereNull('startTime');
+                                    });
+                          });
+                      });
             } elseif ($matchType === 'prematch') {
                 // Prematch: Future matches (startTime > now) within 2 days
                 // Include both eventType='prematch' AND future matches with live_status_id=0
@@ -276,21 +330,22 @@ class MatchesController extends Controller
                       ->where('startTime', '>', $utcNow);
             }
 
-            // For live matches: Only exclude cancelled (status -1)
-            // Trust aggregation system for live/finished status
-            if ($matchType === 'live') {
-                $query->where('live_status_id', '!=', -1);
-            } else {
-                // For other match types, exclude both cancelled and finished
+            // For non-live match types, exclude both cancelled and finished
+            if ($matchType !== 'live') {
                 $query->where('live_status_id', '!=', -1)
                       ->where('live_status_id', '!=', 2);
             }
+            // Note: Live matches already have finished exclusion in the matchType === 'live' block above
 
             if ($matchType === 'all') {
+                // CRITICAL: Exclude finished matches from 'all' type as well
+                $query->where('live_status_id', '!=', -1)  // Exclude cancelled
+                      ->where('live_status_id', '!=', 2);   // Exclude finished - ABSOLUTE
+                
                 $query->where(function($q) use ($utcNow) {
-                    // Include live matches (regardless of age)
+                    // Include live matches (status 1 only, not finished)
                     $q->where(function($liveQ) use ($utcNow) {
-                        $liveQ->where('live_status_id', '>', 0)
+                        $liveQ->where('live_status_id', '=', 1) // Only live, not finished
                               ->where('startTime', '<=', $utcNow); // Live matches should not be in the future (timezone-aware)
                     })
                     // OR include prematch matches with open markets within 2 days
@@ -564,20 +619,39 @@ class MatchesController extends Controller
         // CRITICAL: Match must have started to be "live"
         // Future matches are NOT live, even if Pinnacle marks them as "live for betting"
         if ($startTime > $now) {
-            return false; // Future matches are prematch, not live
+            // BUT: If match has live_status_id > 0 or has scores, it might have wrong start time
+            // Check if match is actually playing despite future start time
+            $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
+            $homeScore = isset($match['home_score']) ? $match['home_score'] : (isset($match->home_score) ? $match->home_score : 0);
+            $awayScore = isset($match['away_score']) ? $match['away_score'] : (isset($match->away_score) ? $match->away_score : 0);
+            
+            // If match has live indicators but future start time, start time is likely wrong
+            // But still don't show as live if it's clearly finished (has final scores and no live status)
+            if ($liveStatusId > 0 || ($homeScore > 0 || $awayScore > 0)) {
+                // Start time might be wrong, but check if it's finished
+                if ($liveStatusId == 0 && ($homeScore > 0 || $awayScore > 0)) {
+                    // Has scores but no live status and future start time = likely finished with wrong start time
+                    return false;
+                }
+                // Has live status, might actually be live despite wrong start time
+                // Continue to other checks below
+            } else {
+                return false; // Future matches with no indicators are prematch, not live
+            }
         }
 
         // PRIMARY: Check live_status_id - trust aggregation system
         $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
         
+        // CRITICAL: ABSOLUTE EXCLUSION - Finished matches should NEVER show as live
+        // This is checked FIRST before any other logic
+        if ($liveStatusId === 2) {
+            return false; // Finished - NEVER show
+        }
+        
         // Match is cancelled - never show as live
         if ($liveStatusId === -1) {
-            return false;
-        }
-
-        // Match is finished - never show as live
-        if ($liveStatusId === 2) {
-            return false;
+            return false; // Cancelled - NEVER show
         }
 
         // PRIMARY: If aggregation system says it's live (live_status_id > 0) AND match has started, it's live
@@ -605,9 +679,60 @@ class MatchesController extends Controller
             return true; // Match has scores, it's live
         }
 
+        // CRITICAL FIX: Exclude matches that are clearly finished
+        // If match started more than 4 hours ago and has no live indicators, it's likely finished
+        if ($startTime && $startTime < $now) {
+            $hoursSinceStart = $now->diffInHours($startTime);
+            $sportId = isset($match['sport_id']) ? $match['sport_id'] : (isset($match->sportId) ? $match->sportId : 1);
+            
+            // Soccer matches typically last 2 hours max (90 min + extra time)
+            // Basketball matches typically last 2.5 hours max
+            // If match started 4+ hours ago with no live indicators, it's finished
+            $maxMatchDuration = ($sportId == 1) ? 3 : 4; // Soccer: 3 hours, others: 4 hours
+            
+            if ($hoursSinceStart > $maxMatchDuration && $liveStatusId == 0 && !$hasScores) {
+                $matchId = $match['id'] ?? $match->eventId ?? null;
+                Log::info('Excluding likely finished match from live list - marking as finished', [
+                    'match_id' => $matchId,
+                    'hours_since_start' => $hoursSinceStart,
+                    'live_status_id' => $liveStatusId,
+                    'has_scores' => $hasScores
+                ]);
+                
+                // Mark match as finished in database if we have the ID
+                if ($matchId) {
+                    try {
+                        $dbMatch = \App\Models\SportsMatch::where('eventId', $matchId)->first();
+                        if ($dbMatch && $dbMatch->live_status_id != 2) {
+                            $dbMatch->markAsFinished();
+                            Log::info('Marked match as finished based on time elapsed', [
+                                'match_id' => $matchId,
+                                'hours_since_start' => $hoursSinceStart
+                            ]);
+                        }
+                    } catch (\Exception $e) {
+                        Log::warning('Failed to mark match as finished', [
+                            'match_id' => $matchId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                }
+                
+                return false; // Match is likely finished
+            }
+        }
+
         // If match has started but no indicators, still consider it potentially live
         // This ensures we don't miss matches that just started
-        return true;
+        // BUT only if it started recently (within last 3 hours)
+        if ($startTime && $startTime < $now) {
+            $hoursSinceStart = $now->diffInHours($startTime);
+            if ($hoursSinceStart <= 3) {
+                return true; // Match started recently, might be live
+            }
+        }
+
+        return false; // Default to not live if we can't determine
     }
 
     /**
@@ -708,11 +833,22 @@ class MatchesController extends Controller
     private function filterMatchesByVisibilityRules($matches)
     {
         return array_filter($matches, function($match) {
+            // CRITICAL: ABSOLUTE EXCLUSION of finished matches - NO EXCEPTIONS
+            $liveStatusId = $match['live_status_id'] ?? (isset($match->live_status_id) ? $match->live_status_id : 0);
+            
+            // Finished matches (status 2) should NEVER appear, regardless of any other condition
+            if ($liveStatusId === 2) {
+                return false;
+            }
+            
+            // Cancelled matches (status -1) should also never appear
+            if ($liveStatusId === -1) {
+                return false;
+            }
+            
             if (!$this->isLiveVisible($match)) {
                 return false;
             }
-
-            $liveStatusId = $match['live_status_id'] ?? 0;
 
             if ($liveStatusId === -1) {
                 return false;
@@ -1006,28 +1142,193 @@ class MatchesController extends Controller
             // 1. Fetch from Pinnacle
             $pinnacleOdds = [];
             try {
-                // Use regular markets endpoint for standard markets (money_line, spreads, totals)
+                // CRITICAL FIX: Use getMarketsForEvent to get markets for THIS specific event
+                // This ensures we get the correct event even if it's not in the general /markets/live response
                 $isLive = $eventType === 'live';
-                $marketsData = $this->pinnacleApi->getMarkets($sportId, $isLive);
+                
+                // Try event-specific endpoint first
+                $marketsData = $this->pinnacleApi->getMarketsForEvent($matchId, $sportId, $isLive);
+                
+                Log::info('DEBUG: getMarketsForEvent response', [
+                    'matchId' => $matchId,
+                    'sportId' => $sportId,
+                    'isLive' => $isLive,
+                    'has_events' => isset($marketsData['events']),
+                    'events_count' => isset($marketsData['events']) ? count($marketsData['events']) : 0,
+                    'top_keys' => array_keys($marketsData),
+                    'raw_response_sample' => json_encode(array_slice($marketsData, 0, 3, true))
+                ]);
+                
+                // If that doesn't work, try the opposite type (live vs prematch)
+                if (empty($marketsData['events'])) {
+                    Log::warning('Event-specific markets empty, trying opposite type', [
+                        'matchId' => $matchId,
+                        'sportId' => $sportId,
+                        'original_type' => $isLive ? 'live' : 'prematch',
+                        'trying_type' => $isLive ? 'prematch' : 'live'
+                    ]);
+                    $marketsData = $this->pinnacleApi->getMarketsForEvent($matchId, $sportId, !$isLive);
+                    Log::info('DEBUG: getMarketsForEvent (opposite type) response', [
+                        'has_events' => isset($marketsData['events']),
+                        'events_count' => isset($marketsData['events']) ? count($marketsData['events']) : 0,
+                        'top_keys' => array_keys($marketsData)
+                    ]);
+                }
+                
+                // If still empty, fall back to general markets endpoint
+                if (empty($marketsData['events'])) {
+                    Log::warning('Event-specific markets still empty, trying general markets endpoint', [
+                        'matchId' => $matchId,
+                        'sportId' => $sportId,
+                        'isLive' => $isLive
+                    ]);
+                    $marketsData = $this->pinnacleApi->getMarkets($sportId, $isLive);
+                    Log::info('DEBUG: getMarkets fallback response', [
+                        'has_events' => isset($marketsData['events']),
+                        'events_count' => isset($marketsData['events']) ? count($marketsData['events']) : 0,
+                        'top_keys' => array_keys($marketsData)
+                    ]);
+                    
+                    // If still empty, try opposite type in general markets
+                    if (empty($marketsData['events'])) {
+                        Log::warning('General markets empty, trying opposite type', [
+                            'matchId' => $matchId,
+                            'sportId' => $sportId
+                        ]);
+                        $marketsData = $this->pinnacleApi->getMarkets($sportId, !$isLive);
+                        Log::info('DEBUG: getMarkets (opposite type) response', [
+                            'has_events' => isset($marketsData['events']),
+                            'events_count' => isset($marketsData['events']) ? count($marketsData['events']) : 0
+                        ]);
+                    }
+                }
+                
                 $pinnacleOdds = $this->extractPinnacleOddsFromMarkets($marketsData, $matchId);
                 
+                Log::info('DEBUG: After extractPinnacleOddsFromMarkets', [
+                    'matchId' => $matchId,
+                    'extracted_odds_count' => count($pinnacleOdds),
+                    'odds_by_type' => array_count_values(array_column($pinnacleOdds, 'market_type')),
+                    'sample_odds' => array_slice($pinnacleOdds, 0, 3)
+                ]);
+                
+                // If no odds found and match is live, try prematch markets as fallback
+                // Some matches might have odds in prematch but are currently live
+                if (empty($pinnacleOdds) && $isLive) {
+                    Log::info('DEBUG: No live odds found, trying prematch markets as fallback', [
+                        'matchId' => $matchId,
+                        'sportId' => $sportId
+                    ]);
+                    $prematchMarketsData = $this->pinnacleApi->getMarketsForEvent($matchId, $sportId, false);
+                    $prematchOdds = $this->extractPinnacleOddsFromMarkets($prematchMarketsData, $matchId);
+                    if (!empty($prematchOdds)) {
+                        $pinnacleOdds = $prematchOdds;
+                        Log::info('DEBUG: Found odds in prematch markets', [
+                            'matchId' => $matchId,
+                            'odds_count' => count($pinnacleOdds)
+                        ]);
+                    }
+                }
+                
                 // Also fetch special markets for additional odds
-                $specialMarketsData = $this->pinnacleApi->getSpecialMarkets($eventType, $sportId);
-                $specialOdds = $this->extractPinnacleOdds($specialMarketsData);
+                // NOTE: For non-soccer sports, standard markets (money_line, spreads, totals) 
+                // might be in special markets instead of regular markets
+                // Try to get league_id from match to filter special markets at API level
+                $leagueIds = [];
+                if ($match && isset($match->leagueId)) {
+                    $leagueIds = [$match->leagueId];
+                }
                 
-                // Filter special odds by match and merge
-                $specialOdds = array_filter($specialOdds, function($odd) use ($matchId) {
-                    // Special markets might not have direct event_id, so include all for now
-                    return true;
-                });
+                // Try special markets with league filter first
+                $specialMarketsData = $this->pinnacleApi->getSpecialMarkets($eventType, $sportId, $leagueIds);
                 
+                Log::info('DEBUG: getSpecialMarkets response', [
+                    'matchId' => $matchId,
+                    'sportId' => $sportId,
+                    'leagueIds' => $leagueIds,
+                    'eventType' => $eventType,
+                    'is_array' => is_array($specialMarketsData),
+                    'count' => is_array($specialMarketsData) ? count($specialMarketsData) : 0,
+                    'has_specials' => isset($specialMarketsData['specials']),
+                    'has_special_markets' => isset($specialMarketsData['special_markets']),
+                    'top_keys' => is_array($specialMarketsData) ? array_keys($specialMarketsData) : [],
+                    'raw_response_sample' => is_array($specialMarketsData) ? json_encode(array_slice($specialMarketsData, 0, 3, true)) : 'not_array'
+                ]);
+                
+                // CRITICAL FIX: Filter special odds by match event_id to prevent showing odds from other matches
+                $specialOdds = $this->extractPinnacleOdds($specialMarketsData, $matchId, $match);
+                
+                // If no special odds found and we filtered by league, try without league filter
+                // Some matches might be in special markets but not filtered correctly by league
+                if (empty($specialOdds) && !empty($leagueIds)) {
+                    Log::info('DEBUG: No special odds with league filter, trying without league filter', [
+                        'matchId' => $matchId,
+                        'sportId' => $sportId,
+                        'eventType' => $eventType
+                    ]);
+                    $specialMarketsDataNoFilter = $this->pinnacleApi->getSpecialMarkets($eventType, $sportId, []);
+                    $specialOddsNoFilter = $this->extractPinnacleOdds($specialMarketsDataNoFilter, $matchId, $match);
+                    if (!empty($specialOddsNoFilter)) {
+                        $specialOdds = $specialOddsNoFilter;
+                        Log::info('DEBUG: Found special odds without league filter', [
+                            'matchId' => $matchId,
+                            'odds_count' => count($specialOdds)
+                        ]);
+                    }
+                }
+                
+                // If still no odds, try opposite event type (live vs prematch)
+                if (empty($specialOdds)) {
+                    $oppositeEventType = $eventType === 'live' ? 'prematch' : 'live';
+                    Log::info('DEBUG: No special odds found, trying opposite event type', [
+                        'matchId' => $matchId,
+                        'original_type' => $eventType,
+                        'trying_type' => $oppositeEventType
+                    ]);
+                    $specialMarketsDataOpposite = $this->pinnacleApi->getSpecialMarkets($oppositeEventType, $sportId, $leagueIds);
+                    $specialOddsOpposite = $this->extractPinnacleOdds($specialMarketsDataOpposite, $matchId, $match);
+                    if (!empty($specialOddsOpposite)) {
+                        $specialOdds = $specialOddsOpposite;
+                        Log::info('DEBUG: Found special odds with opposite event type', [
+                            'matchId' => $matchId,
+                            'odds_count' => count($specialOdds)
+                        ]);
+                    }
+                }
+                
+                // Count special odds by type before filtering
+                $specialOddsByType = [];
+                foreach ($specialOdds as $odd) {
+                    $type = $odd['market_type'] ?? 'unknown';
+                    $specialOddsByType[$type] = ($specialOddsByType[$type] ?? 0) + 1;
+                }
+                
+                Log::info('DEBUG: After extractPinnacleOdds (special markets)', [
+                    'matchId' => $matchId,
+                    'special_markets_raw_count' => is_array($specialMarketsData) ? count($specialMarketsData) : 0,
+                    'special_odds_extracted' => count($specialOdds),
+                    'special_odds_by_type' => $specialOddsByType,
+                    'sample_special_odds' => array_slice($specialOdds, 0, 5)
+                ]);
+                
+                // Merge filtered special odds (already filtered by event_id)
                 $pinnacleOdds = array_merge($pinnacleOdds, $specialOdds);
                 
-                Log::info('Fetched Pinnacle odds', [
+                // Count odds by market type for debugging
+                $oddsByType = [];
+                foreach ($pinnacleOdds as $odd) {
+                    $type = $odd['market_type'] ?? 'unknown';
+                    $oddsByType[$type] = ($oddsByType[$type] ?? 0) + 1;
+                }
+                
+                Log::info('DEBUG: Final Pinnacle odds before aggregation', [
                     'matchId' => $matchId,
+                    'sportId' => $sportId,
                     'standard_odds_count' => count($pinnacleOdds) - count($specialOdds),
                     'special_odds_count' => count($specialOdds),
-                    'total_odds_count' => count($pinnacleOdds)
+                    'total_odds_count' => count($pinnacleOdds),
+                    'odds_by_type' => $oddsByType,
+                    'sample_all_odds' => array_slice($pinnacleOdds, 0, 10)
                 ]);
             } catch (\Exception $e) {
                 Log::warning('Failed to fetch Pinnacle odds', [
@@ -1152,7 +1453,24 @@ class MatchesController extends Controller
             ]);
 
             // 5. Process aggregated odds (convert to display format, add player props, etc.)
+            Log::info('DEBUG: Before processAggregatedOdds', [
+                'matchId' => $matchId,
+                'aggregated_count' => count($aggregatedOdds),
+                'market_type' => $marketType,
+                'period' => $period,
+                'aggregated_by_type' => array_count_values(array_column($aggregatedOdds, 'market_type'))
+            ]);
+            
             $oddsData = $this->processAggregatedOdds($aggregatedOdds, $matchId, $period, $marketType, $apiFootballPlayers, $sportId);
+            
+            Log::info('DEBUG: After processAggregatedOdds - FINAL RESULT', [
+                'matchId' => $matchId,
+                'market_type' => $marketType,
+                'total_count' => $oddsData['total_count'] ?? 0,
+                'showing_count' => $oddsData['showing_count'] ?? 0,
+                'odds_count' => count($oddsData['odds'] ?? []),
+                'sample_odds' => array_slice($oddsData['odds'] ?? [], 0, 5)
+            ]);
 
             return response()->json($oddsData);
 
@@ -1390,44 +1708,158 @@ class MatchesController extends Controller
      * Extract odds from Pinnacle markets data
      * 
      * @param array $marketsData Raw Pinnacle markets data
+     * @param string|int|null $eventId Event ID to filter by (optional)
+     * @param object|null $match Match object for additional filtering (optional)
      * @return array Extracted odds in normalized format
      */
-    private function extractPinnacleOdds(array $marketsData): array
+    private function extractPinnacleOdds(array $marketsData, $eventId = null, $match = null): array
     {
         $odds = [];
         
+        // Check if special markets are grouped by event (common structure)
+        // Structure might be: [{'event_id': 123, 'markets': [...]}, ...]
+        if (is_array($marketsData) && !empty($marketsData) && isset($marketsData[0]['event_id'])) {
+            // Markets are grouped by event - filter at event level
+            foreach ($marketsData as $eventGroup) {
+                $groupEventId = $eventGroup['event_id'] ?? null;
+                if ($eventId && $groupEventId) {
+                    // Handle both string and int comparison
+                    $matches = ($groupEventId == $eventId) || 
+                              ((string)$groupEventId === (string)$eventId) ||
+                              ((int)$groupEventId === (int)$eventId);
+                    if (!$matches) {
+                        continue; // Skip this event group
+                    }
+                }
+                
+                // Extract markets from this event group
+                $eventMarkets = $eventGroup['markets'] ?? $eventGroup['specials'] ?? $eventGroup['special_markets'] ?? [];
+                if (is_array($eventMarkets)) {
+                    foreach ($eventMarkets as $market) {
+                        // Process this market (no need to check event_id again, already filtered)
+                        $marketsDataToProcess = ['specials' => [$market]];
+                        $extracted = $this->extractPinnacleOdds($marketsDataToProcess, null, null);
+                        $odds = array_merge($odds, $extracted);
+                    }
+                }
+            }
+            return $odds;
+        }
+        
+        // Helper function to check if a market belongs to the specified event
+        // SIMPLIFIED: For standard markets (money_line, spreads, totals), be more lenient
+        // since they're already filtered by league at API level
+        $belongsToEvent = function($market, $isStandardMarket = false) use ($eventId, $match) {
+            // If no eventId provided, include all (backward compatibility)
+            if ($eventId === null) {
+                return true;
+            }
+            
+            // Check if market has event_id field
+            $marketEventId = $market['event_id'] ?? null;
+            if ($marketEventId !== null) {
+                // Handle both string and int comparison
+                return ($marketEventId == $eventId) || 
+                       ((string)$marketEventId === (string)$eventId) ||
+                       ((int)$marketEventId === (int)$eventId);
+            }
+            
+            // CRITICAL FIX: If it's a standard market type and no event_id, include it
+            // (special markets are filtered by league at API level, so this is safe)
+            if ($isStandardMarket) {
+                return true;
+            }
+            
+            // For non-standard markets, try team name matching
+            if ($match && isset($match->homeTeam) && isset($match->awayTeam)) {
+                $marketName = strtolower($market['name'] ?? '');
+                $homeTeam = strtolower($match->homeTeam);
+                $awayTeam = strtolower($match->awayTeam);
+                
+                // Also check in lines/outcomes for team references
+                $allText = $marketName;
+                if (isset($market['lines']) && is_array($market['lines'])) {
+                    foreach ($market['lines'] as $line) {
+                        $allText .= ' ' . strtolower($line['name'] ?? '');
+                        $allText .= ' ' . strtolower($line['outcome'] ?? '');
+                    }
+                }
+                if (isset($market['outcomes']) && is_array($market['outcomes'])) {
+                    foreach ($market['outcomes'] as $outcome) {
+                        $allText .= ' ' . strtolower($outcome['name'] ?? '');
+                    }
+                }
+                
+                // Check if market contains team names
+                $containsHomeTeam = stripos($allText, $homeTeam) !== false;
+                $containsAwayTeam = stripos($allText, $awayTeam) !== false;
+                
+                if ($containsHomeTeam || $containsAwayTeam) {
+                    return true;
+                }
+            }
+            
+            // For non-standard markets without event_id or team match, exclude to be safe
+            return false;
+        };
+        
         // Map Pinnacle market names and bet_types to our standard market types
+        // EXPANDED: Now handles sport-specific variations for non-soccer sports
         $marketTypeMap = [
             'match winner' => 'money_line',
             '1x2' => 'money_line',
             'money line' => 'money_line',
+            'moneylin' => 'money_line',  // "Moneyline" (one word) for basketball, etc.
             'match result' => 'money_line',
             'winner' => 'money_line',
+            'outright' => 'money_line',
+            'to win' => 'money_line',
+            'straight' => 'money_line',
             'over/under' => 'totals',
+            'over under' => 'totals',
+            'over-under' => 'totals',
+            'ou ' => 'totals',  // "OU 150.5" format
             'total' => 'totals',
             'totals' => 'totals',
+            'points total' => 'totals',
+            'goals total' => 'totals',
+            'runs total' => 'totals',
             'handicap' => 'spreads',
             'spread' => 'spreads',
             'asian handicap' => 'spreads',
+            'asian' => 'spreads',
+            'hcp' => 'spreads',  // Abbreviation
+            'hdcp' => 'spreads',  // Abbreviation
+            'line' => 'spreads',  // "Line" for basketball, etc.
         ];
         
         $normalizeMarketType = function($marketName, $betType = null) use ($marketTypeMap) {
             // First check bet_type if available (more reliable)
             if ($betType) {
                 $bt = strtolower(trim($betType));
-                if ($bt === '1x2' || $bt === 'match_winner' || $bt === 'money_line') {
+                if ($bt === '1x2' || $bt === 'match_winner' || $bt === 'money_line' || 
+                    $bt === 'moneylin' || $bt === 'outright' || $bt === 'to_win') {
                     return 'money_line';
                 }
-                if ($bt === 'over_under' || $bt === 'total' || $bt === 'totals') {
+                if ($bt === 'over_under' || $bt === 'over-under' || $bt === 'total' || 
+                    $bt === 'totals' || $bt === 'points_total' || $bt === 'goals_total') {
                     return 'totals';
                 }
-                if ($bt === 'handicap' || $bt === 'spread' || $bt === 'asian_handicap') {
+                if ($bt === 'handicap' || $bt === 'spread' || $bt === 'asian_handicap' || 
+                    $bt === 'hcp' || $bt === 'line') {
                     return 'spreads';
                 }
             }
             
             // Fallback to market name matching
             $name = strtolower(trim($marketName ?? ''));
+            
+            // Special handling: exclude "player" from "total" matching
+            if (stripos($name, 'player') !== false && stripos($name, 'total') !== false) {
+                // This is a player prop, not a totals market
+                return 'unknown';
+            }
+            
             foreach ($marketTypeMap as $key => $type) {
                 if (stripos($name, $key) !== false) {
                     return $type;
@@ -1437,13 +1869,56 @@ class MatchesController extends Controller
         };
         
         if (isset($marketsData['specials']) && is_array($marketsData['specials'])) {
+            Log::info('DEBUG: Processing specials array', [
+                'specials_count' => count($marketsData['specials']),
+                'event_id' => $eventId
+            ]);
+            
             foreach ($marketsData['specials'] as $market) {
                 $marketName = $market['name'] ?? 'unknown';
                 $betType = $market['bet_type'] ?? null;
                 $normalizedType = $normalizeMarketType($marketName, $betType);
                 
-                // Skip if market type is unknown (not money_line, spreads, or totals)
+                // Determine if this is a standard market type
+                $isStandardMarket = in_array($normalizedType, ['money_line', 'spreads', 'totals']);
+                
+                Log::debug('DEBUG: Processing special market', [
+                    'market_name' => $marketName,
+                    'bet_type' => $betType,
+                    'normalized_type' => $normalizedType,
+                    'is_standard' => $isStandardMarket,
+                    'has_event_id' => isset($market['event_id']),
+                    'event_id_value' => $market['event_id'] ?? 'none'
+                ]);
+                
+                // Check if market belongs to event (pass isStandardMarket flag)
+                $belongsToEventResult = $belongsToEvent($market, $isStandardMarket);
+                
+                Log::debug('DEBUG: belongsToEvent result', [
+                    'market_name' => $marketName,
+                    'belongs_to_event' => $belongsToEventResult,
+                    'is_standard' => $isStandardMarket
+                ]);
+                
+                // Exclude if it doesn't belong (standard markets are handled inside belongsToEvent)
+                if (!$belongsToEventResult) {
+                    Log::debug('DEBUG: Excluding market - does not belong to event', [
+                        'market_name' => $marketName,
+                        'normalized_type' => $normalizedType
+                    ]);
+                    continue;
+                }
+                
+                // Log unrecognized markets for debugging (especially for non-soccer sports)
                 if ($normalizedType === 'unknown') {
+                    Log::debug('Unrecognized market in extractPinnacleOdds (specials)', [
+                        'market_name' => $marketName,
+                        'bet_type' => $betType,
+                        'market_keys' => array_keys($market),
+                        'has_lines' => isset($market['lines']),
+                        'has_outcomes' => isset($market['outcomes']),
+                        'event_id' => $market['event_id'] ?? 'not_set'
+                    ]);
                     continue;
                 }
                 
@@ -1485,8 +1960,27 @@ class MatchesController extends Controller
                 $betType = $market['bet_type'] ?? null;
                 $normalizedType = $normalizeMarketType($marketName, $betType);
                 
-                // Skip if market type is unknown
+                // Determine if this is a standard market type
+                $isStandardMarket = in_array($normalizedType, ['money_line', 'spreads', 'totals']);
+                
+                // Check if market belongs to event (pass isStandardMarket flag)
+                $belongsToEventResult = $belongsToEvent($market, $isStandardMarket);
+                
+                // Exclude if it doesn't belong (standard markets are handled inside belongsToEvent)
+                if (!$belongsToEventResult) {
+                    continue;
+                }
+                
+                // Log unrecognized markets for debugging (especially for non-soccer sports)
                 if ($normalizedType === 'unknown') {
+                    Log::debug('Unrecognized market in extractPinnacleOdds (special_markets)', [
+                        'market_name' => $marketName,
+                        'bet_type' => $betType,
+                        'market_keys' => array_keys($market),
+                        'has_lines' => isset($market['lines']),
+                        'has_outcomes' => isset($market['outcomes']),
+                        'event_id' => $market['event_id'] ?? 'not_set'
+                    ]);
                     continue;
                 }
                 
@@ -1522,6 +2016,64 @@ class MatchesController extends Controller
             }
         }
         
+        // Handle case where special markets might be a flat array (not nested)
+        // Check if the data itself is an array of markets (not nested under 'specials' or 'special_markets')
+        if (empty($odds) && is_array($marketsData) && !isset($marketsData['specials']) && !isset($marketsData['special_markets'])) {
+            // Check if first element looks like a market (has 'name' or 'lines' or 'outcomes')
+            $firstElement = reset($marketsData);
+            if (is_array($firstElement) && (isset($firstElement['name']) || isset($firstElement['lines']) || isset($firstElement['outcomes']))) {
+                foreach ($marketsData as $market) {
+                    $marketName = $market['name'] ?? 'unknown';
+                    $betType = $market['bet_type'] ?? null;
+                    $normalizedType = $normalizeMarketType($marketName, $betType);
+                    
+                    if ($normalizedType === 'unknown') {
+                        continue;
+                    }
+                    
+                    // Determine if this is a standard market type
+                    $isStandardMarket = in_array($normalizedType, ['money_line', 'spreads', 'totals']);
+                    
+                    // Check if market belongs to event (pass isStandardMarket flag)
+                    $belongsToEventResult = $belongsToEvent($market, $isStandardMarket);
+                    
+                    // Exclude if it doesn't belong
+                    if (!$belongsToEventResult) {
+                        continue;
+                    }
+                    
+                    // Extract odds from lines or outcomes
+                    if (isset($market['lines']) && is_array($market['lines'])) {
+                        foreach ($market['lines'] as $line) {
+                            $odds[] = [
+                                'market_type' => $normalizedType,
+                                'market_name' => $marketName,
+                                'selection' => $line['name'] ?? $line['outcome'] ?? '',
+                                'line' => $line['line'] ?? $line['handicap'] ?? null,
+                                'price' => $line['odds'] ?? $line['price'] ?? null,
+                                'period' => $market['period'] ?? 'Game',
+                                'status' => ($market['open'] ?? $market['is_open'] ?? true) ? 'open' : 'closed',
+                            ];
+                        }
+                    }
+                    
+                    if (isset($market['outcomes']) && is_array($market['outcomes'])) {
+                        foreach ($market['outcomes'] as $outcome) {
+                            $odds[] = [
+                                'market_type' => $normalizedType,
+                                'market_name' => $marketName,
+                                'selection' => $outcome['name'] ?? '',
+                                'line' => $outcome['line'] ?? null,
+                                'price' => $outcome['odds'] ?? null,
+                                'period' => $market['period'] ?? 'Game',
+                                'status' => ($market['open'] ?? $market['is_open'] ?? true) ? 'open' : 'closed',
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+        
         return $odds;
     }
     
@@ -1537,30 +2089,298 @@ class MatchesController extends Controller
     {
         $odds = [];
         
+        // Log the raw structure for debugging
+        Log::debug('extractPinnacleOddsFromMarkets - Raw data structure', [
+            'event_id' => $eventId,
+            'has_events' => isset($marketsData['events']),
+            'top_level_keys' => array_keys($marketsData),
+            'events_count' => isset($marketsData['events']) && is_array($marketsData['events']) ? count($marketsData['events']) : 0
+        ]);
+        
         if (!isset($marketsData['events']) || !is_array($marketsData['events'])) {
+            // Check if data is in a different structure (some APIs return data directly)
+            if (is_array($marketsData) && !empty($marketsData)) {
+                Log::warning('DEBUG: Pinnacle markets data structure unexpected', [
+                    'event_id' => $eventId,
+                    'structure' => array_keys($marketsData),
+                    'is_array' => is_array($marketsData),
+                    'is_empty' => empty($marketsData),
+                    'sample_data' => json_encode(array_slice($marketsData, 0, 3, true))
+                ]);
+            } else {
+                Log::warning('DEBUG: Pinnacle markets data is empty or not array', [
+                    'event_id' => $eventId,
+                    'type' => gettype($marketsData),
+                    'is_empty' => empty($marketsData)
+                ]);
+            }
             return $odds;
         }
         
+        Log::info('DEBUG: extractPinnacleOddsFromMarkets - Processing events', [
+            'event_id' => $eventId,
+            'total_events' => count($marketsData['events']),
+            'event_ids_in_data' => array_column($marketsData['events'], 'event_id')
+        ]);
+        
         // Find the event matching our matchId
+        // CRITICAL: Handle both string and integer event_id matching
+        $eventFound = false;
+        $eventIdStr = (string)$eventId;
+        $eventIdInt = (int)$eventId;
+        
         foreach ($marketsData['events'] as $event) {
-            if (($event['event_id'] ?? null) == $eventId) {
+            $eventIdFromData = $event['event_id'] ?? null;
+            
+            // Try both string and integer comparison
+            $matches = ($eventIdFromData == $eventId) || 
+                       ($eventIdFromData == $eventIdStr) || 
+                       ($eventIdFromData == $eventIdInt) ||
+                       ((string)$eventIdFromData === $eventIdStr) ||
+                       ((int)$eventIdFromData === $eventIdInt);
+            
+            Log::debug('Checking event in extractPinnacleOddsFromMarkets', [
+                'looking_for' => $eventId,
+                'looking_for_str' => $eventIdStr,
+                'looking_for_int' => $eventIdInt,
+                'found_event_id' => $eventIdFromData,
+                'found_event_id_type' => gettype($eventIdFromData),
+                'matches' => $matches,
+                'event_keys' => array_keys($event)
+            ]);
+            
+            if ($matches) {
+                $eventFound = true;
+                Log::info('DEBUG: Found matching event in Pinnacle markets', [
+                    'event_id' => $eventId,
+                    'has_periods' => isset($event['periods']),
+                    'periods_count' => isset($event['periods']) && is_array($event['periods']) ? count($event['periods']) : 0,
+                    'event_structure' => array_keys($event),
+                    'full_event_sample' => json_encode(array_slice($event, 0, 5, true))
+                ]);
+                
                 // Extract markets from this event
                 if (isset($event['periods']) && is_array($event['periods'])) {
-                    foreach ($event['periods'] as $period) {
-                        $periodName = $period['period'] ?? 'Game';
+                    Log::info('DEBUG: Processing periods for event', [
+                        'event_id' => $eventId,
+                        'periods_count' => count($event['periods']),
+                        'period_keys' => array_keys($event['periods'])
+                    ]);
+                    
+                    // CRITICAL: Periods use string keys like 'num_0', 'num_1', not numeric indices
+                    foreach ($event['periods'] as $periodKey => $period) {
+                        $periodName = $period['description'] ?? $period['period'] ?? 'Game';
+                        $periodNumber = $period['number'] ?? 0;
                         
+                        Log::info('DEBUG: Processing period', [
+                            'event_id' => $eventId,
+                            'period' => $periodName,
+                            'period_number' => $periodNumber,
+                            'period_keys' => array_keys($period)
+                        ]);
+                        
+                        // CRITICAL FIX: Pinnacle API structure - markets are direct properties of period
+                        // Structure: period['money_line'], period['spreads'], period['totals']
+                        
+                        // 1. Extract Money Line (1X2)
+                        if (isset($period['money_line']) && is_array($period['money_line'])) {
+                            Log::info('DEBUG: Processing money_line', [
+                                'event_id' => $eventId,
+                                'period' => $periodName,
+                                'money_line_keys' => array_keys($period['money_line']),
+                                'has_home' => isset($period['money_line']['home']),
+                                'has_draw' => isset($period['money_line']['draw']),
+                                'has_away' => isset($period['money_line']['away'])
+                            ]);
+                            
+                            $moneyLine = $period['money_line'];
+                            if (isset($moneyLine['home']) && $moneyLine['home'] !== null) {
+                                $odds[] = [
+                                    'market_type' => 'money_line',
+                                    'market_name' => 'Match Winner',
+                                    'selection' => 'Home',
+                                    'line' => null,
+                                    'price' => $moneyLine['home'],
+                                    'period' => $periodName,
+                                    'status' => 'open',
+                                    'provider' => 'pinnacle',
+                                ];
+                            }
+                            if (isset($moneyLine['draw']) && $moneyLine['draw'] !== null) {
+                                $odds[] = [
+                                    'market_type' => 'money_line',
+                                    'market_name' => 'Match Winner',
+                                    'selection' => 'Draw',
+                                    'line' => null,
+                                    'price' => $moneyLine['draw'],
+                                    'period' => $periodName,
+                                    'status' => 'open',
+                                    'provider' => 'pinnacle',
+                                ];
+                            }
+                            if (isset($moneyLine['away']) && $moneyLine['away'] !== null) {
+                                $odds[] = [
+                                    'market_type' => 'money_line',
+                                    'market_name' => 'Match Winner',
+                                    'selection' => 'Away',
+                                    'line' => null,
+                                    'price' => $moneyLine['away'],
+                                    'period' => $periodName,
+                                    'status' => 'open',
+                                    'provider' => 'pinnacle',
+                                ];
+                            }
+                        }
+                        
+                        // 2. Extract Spreads (Handicap)
+                        if (isset($period['spreads']) && is_array($period['spreads'])) {
+                            Log::info('DEBUG: Processing spreads', [
+                                'event_id' => $eventId,
+                                'period' => $periodName,
+                                'spreads_count' => count($period['spreads']),
+                                'spreads_keys' => array_keys($period['spreads'])
+                            ]);
+                            
+                            foreach ($period['spreads'] as $lineKey => $spreadData) {
+                                if (!is_array($spreadData)) continue;
+                                
+                                // CRITICAL: Use hdp from data if available, otherwise use lineKey
+                                // lineKey might be string like "-2.0", convert to float for consistency
+                                $handicap = isset($spreadData['hdp']) ? (float)$spreadData['hdp'] : (float)$lineKey;
+                                
+                                if (isset($spreadData['home']) && $spreadData['home'] !== null) {
+                                    $odds[] = [
+                                        'market_type' => 'spreads',
+                                        'market_name' => 'Handicap',
+                                        'selection' => 'Home',
+                                        'line' => $handicap,
+                                        'price' => $spreadData['home'],
+                                        'period' => $periodName,
+                                        'status' => 'open',
+                                        'provider' => 'pinnacle',
+                                    ];
+                                }
+                                if (isset($spreadData['away']) && $spreadData['away'] !== null) {
+                                    $odds[] = [
+                                        'market_type' => 'spreads',
+                                        'market_name' => 'Handicap',
+                                        'selection' => 'Away',
+                                        'line' => $handicap,
+                                        'price' => $spreadData['away'],
+                                        'period' => $periodName,
+                                        'status' => 'open',
+                                        'provider' => 'pinnacle',
+                                    ];
+                                }
+                            }
+                        }
+                        
+                        // 3. Extract Totals (Over/Under)
+                        if (isset($period['totals']) && is_array($period['totals'])) {
+                            Log::info('DEBUG: Processing totals', [
+                                'event_id' => $eventId,
+                                'period' => $periodName,
+                                'totals_count' => count($period['totals']),
+                                'totals_keys' => array_keys($period['totals'])
+                            ]);
+                            
+                            foreach ($period['totals'] as $lineKey => $totalData) {
+                                if (!is_array($totalData)) continue;
+                                
+                                // CRITICAL: Use points from data if available, otherwise use lineKey
+                                // lineKey might be string like "3.5", convert to float for consistency
+                                $points = isset($totalData['points']) ? (float)$totalData['points'] : (float)$lineKey;
+                                
+                                if (isset($totalData['over']) && $totalData['over'] !== null) {
+                                    $odds[] = [
+                                        'market_type' => 'totals',
+                                        'market_name' => 'Total',
+                                        'selection' => 'Over',
+                                        'line' => $points,
+                                        'price' => $totalData['over'],
+                                        'period' => $periodName,
+                                        'status' => 'open',
+                                        'provider' => 'pinnacle',
+                                    ];
+                                }
+                                if (isset($totalData['under']) && $totalData['under'] !== null) {
+                                    $odds[] = [
+                                        'market_type' => 'totals',
+                                        'market_name' => 'Total',
+                                        'selection' => 'Under',
+                                        'line' => $points,
+                                        'price' => $totalData['under'],
+                                        'period' => $periodName,
+                                        'status' => 'open',
+                                        'provider' => 'pinnacle',
+                                    ];
+                                }
+                            }
+                        }
+                        
+                        // 4. Fallback: Check for old structure with markets array (backward compatibility)
                         if (isset($period['markets']) && is_array($period['markets'])) {
+                            Log::info('DEBUG: Processing markets in period', [
+                                'event_id' => $eventId,
+                                'period' => $periodName,
+                                'markets_count' => count($period['markets']),
+                                'market_names' => array_column($period['markets'], 'name')
+                            ]);
+                            
                             foreach ($period['markets'] as $market) {
                                 $marketName = strtolower($market['name'] ?? '');
-                                $marketType = $this->mapPinnacleMarketNameToType($marketName);
+                                $originalMarketName = $market['name'] ?? '';
+                                $betType = $market['bet_type'] ?? null;
                                 
+                                // Try to determine market type from bet_type first (more reliable)
+                                $marketType = null;
+                                if ($betType) {
+                                    $bt = strtolower(trim($betType));
+                                    if (in_array($bt, ['1x2', 'match_winner', 'money_line', 'moneylin', 'outright', 'to_win', 'straight'])) {
+                                        $marketType = 'money_line';
+                                    } elseif (in_array($bt, ['over_under', 'over-under', 'total', 'totals', 'points_total', 'goals_total', 'runs_total'])) {
+                                        $marketType = 'totals';
+                                    } elseif (in_array($bt, ['handicap', 'spread', 'asian_handicap', 'hcp', 'line'])) {
+                                        $marketType = 'spreads';
+                                    }
+                                }
+                                
+                                // Fallback to market name mapping if bet_type didn't work
+                                if (!$marketType) {
+                                    $marketType = $this->mapPinnacleMarketNameToType($marketName);
+                                }
+                                
+                                // Log market names that aren't recognized for debugging
                                 if ($marketType === 'unknown') {
+                                    Log::debug('Unrecognized market name in extractPinnacleOddsFromMarkets', [
+                                        'event_id' => $eventId,
+                                        'market_name' => $originalMarketName,
+                                        'market_name_lower' => $marketName,
+                                        'bet_type' => $betType,
+                                        'market_keys' => array_keys($market)
+                                    ]);
                                     continue;
                                 }
                                 
+                                Log::debug('Extracting market from Pinnacle', [
+                                    'event_id' => $eventId,
+                                    'market_name' => $originalMarketName,
+                                    'bet_type' => $betType,
+                                    'market_type' => $marketType,
+                                    'period' => $periodName
+                                ]);
+                                
                                 if (isset($market['lines']) && is_array($market['lines'])) {
+                                    $linesCount = count($market['lines']);
+                                    Log::debug('DEBUG: Extracting lines from market', [
+                                        'event_id' => $eventId,
+                                        'market_name' => $originalMarketName,
+                                        'market_type' => $marketType,
+                                        'lines_count' => $linesCount
+                                    ]);
+                                    
                                     foreach ($market['lines'] as $line) {
-                                        $odds[] = [
+                                        $odd = [
                                             'market_type' => $marketType,
                                             'market_name' => $market['name'] ?? '',
                                             'selection' => $line['name'] ?? $line['outcome'] ?? '',
@@ -1568,43 +2388,136 @@ class MatchesController extends Controller
                                             'price' => $line['odds'] ?? $line['price'] ?? null,
                                             'period' => $periodName,
                                             'status' => ($line['status'] ?? $market['status'] ?? 'open') === 'open' ? 'open' : 'closed',
+                                            'provider' => 'pinnacle', // Add provider for aggregation
                                         ];
+                                        $odds[] = $odd;
+                                        
+                                        Log::debug('DEBUG: Added odd from line', [
+                                            'market_type' => $marketType,
+                                            'selection' => $odd['selection'],
+                                            'price' => $odd['price'],
+                                            'line' => $odd['line']
+                                        ]);
+                                    }
+                                } else {
+                                    // Also check for 'outcomes' array (alternative structure)
+                                    if (isset($market['outcomes']) && is_array($market['outcomes'])) {
+                                        foreach ($market['outcomes'] as $outcome) {
+                                            $odds[] = [
+                                                'market_type' => $marketType,
+                                                'market_name' => $market['name'] ?? '',
+                                                'selection' => $outcome['name'] ?? $outcome['outcome'] ?? '',
+                                                'line' => $outcome['line'] ?? $outcome['handicap'] ?? null,
+                                                'price' => $outcome['odds'] ?? $outcome['price'] ?? null,
+                                                'period' => $periodName,
+                                                'status' => ($outcome['status'] ?? $market['status'] ?? 'open') === 'open' ? 'open' : 'closed',
+                                                'provider' => 'pinnacle',
+                                            ];
+                                        }
+                                    } else {
+                                        Log::debug('Market has no lines or outcomes', [
+                                            'event_id' => $eventId,
+                                            'market_name' => $originalMarketName,
+                                            'market_keys' => array_keys($market)
+                                        ]);
                                     }
                                 }
                             }
                         }
                     }
+                } else {
+                    Log::warning('Event found but no periods data', [
+                        'event_id' => $eventId,
+                        'event_structure' => array_keys($event)
+                    ]);
                 }
                 break; // Found the event, no need to continue
             }
         }
+        
+        if (!$eventFound) {
+            Log::warning('Event not found in Pinnacle markets data', [
+                'event_id' => $eventId,
+                'available_event_ids' => array_map(function($e) {
+                    return $e['event_id'] ?? 'unknown';
+                }, array_slice($marketsData['events'], 0, 10))
+            ]);
+        }
+        
+        if (!$eventFound) {
+            Log::warning('DEBUG: Event NOT found in extractPinnacleOddsFromMarkets', [
+                'event_id' => $eventId,
+                'event_id_str' => $eventIdStr,
+                'event_id_int' => $eventIdInt,
+                'total_events' => count($marketsData['events']),
+                'event_ids_in_response' => array_column($marketsData['events'], 'event_id'),
+                'odds_extracted' => count($odds)
+            ]);
+        }
+        
+        // Count odds by market type for detailed logging
+        $oddsByType = [];
+        foreach ($odds as $odd) {
+            $type = $odd['market_type'] ?? 'unknown';
+            $oddsByType[$type] = ($oddsByType[$type] ?? 0) + 1;
+        }
+        
+        Log::info('DEBUG: extractPinnacleOddsFromMarkets completed - SUMMARY', [
+            'event_id' => $eventId,
+            'event_found' => $eventFound,
+            'total_odds_count' => count($odds),
+            'odds_by_type' => $oddsByType,
+            'money_line_count' => $oddsByType['money_line'] ?? 0,
+            'spreads_count' => $oddsByType['spreads'] ?? 0,
+            'totals_count' => $oddsByType['totals'] ?? 0,
+            'player_props_count' => $oddsByType['player_props'] ?? 0,
+            'sample_odds' => array_slice($odds, 0, 5)
+        ]);
         
         return $odds;
     }
     
     /**
      * Map Pinnacle market name to our standard market type
+     * EXPANDED: Now handles sport-specific variations for non-soccer sports
      */
     private function mapPinnacleMarketNameToType(string $marketName): string
     {
         $name = strtolower(trim($marketName));
         
+        // Money Line variations (for all sports)
         if (stripos($name, 'match winner') !== false || 
             stripos($name, '1x2') !== false || 
             stripos($name, 'money line') !== false ||
-            stripos($name, 'match result') !== false) {
+            stripos($name, 'moneylin') !== false ||  // "Moneyline" (one word) for basketball, etc.
+            stripos($name, 'match result') !== false ||
+            stripos($name, 'winner') !== false ||
+            stripos($name, 'outright') !== false ||
+            stripos($name, 'to win') !== false ||
+            stripos($name, 'straight') !== false) {
             return 'money_line';
         }
         
+        // Totals variations (for all sports)
         if (stripos($name, 'over/under') !== false || 
-            stripos($name, 'total') !== false ||
-            stripos($name, 'totals') !== false) {
+            stripos($name, 'over under') !== false ||
+            stripos($name, 'over-under') !== false ||
+            stripos($name, 'ou ') !== false ||  // "OU 150.5" format
+            (stripos($name, 'total') !== false && stripos($name, 'player') === false) ||  // "Total" but not "Player Total"
+            stripos($name, 'totals') !== false ||
+            stripos($name, 'points total') !== false ||
+            stripos($name, 'goals total') !== false ||
+            stripos($name, 'runs total') !== false) {
             return 'totals';
         }
         
+        // Spreads/Handicap variations (for all sports)
         if (stripos($name, 'handicap') !== false || 
             stripos($name, 'spread') !== false ||
-            stripos($name, 'asian') !== false) {
+            stripos($name, 'asian') !== false ||
+            stripos($name, 'hcp') !== false ||  // Abbreviation
+            stripos($name, 'hdcp') !== false ||  // Abbreviation
+            stripos($name, 'line') !== false) {  // "Line" for basketball, etc.
             return 'spreads';
         }
         

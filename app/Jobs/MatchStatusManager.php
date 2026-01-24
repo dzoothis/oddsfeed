@@ -285,7 +285,7 @@ class MatchStatusManager implements ShouldQueue
 
             // GLOBAL FIX: Find ALL matches that need to be marked as finished
             // ULTRA-AGGRESSIVE: Catch ALL matches 24+ hours old - NO EXCEPTIONS
-            // This ensures matches are automatically marked as finished without manual intervention
+            // Also catch matches marked as LIVE but with wrong start times (future dates but match is finished)
             $pastDueMatches = SportsMatch::where('sportId', $this->sportId)
                 ->whereNotIn('live_status_id', [2, -1]) // Don't process already finished matches
                 ->where(function($q) {
@@ -297,6 +297,12 @@ class MatchStatusManager implements ShouldQueue
                       ->orWhere(function($subQ) {
                           $subQ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 24 HOUR)')
                                ->whereRaw('startTime >= DATE_SUB(NOW(), INTERVAL 48 HOUR)');
+                      })
+                    // CRITICAL FIX: Catch matches marked as LIVE (status 1) that started 3+ hours ago
+                    // Even if start time is wrong, if it's marked live and old, it's finished
+                      ->orWhere(function($liveQ) {
+                          $liveQ->where('live_status_id', 1) // Marked as live
+                                ->whereRaw('startTime < DATE_SUB(NOW(), INTERVAL 3 HOUR)'); // Started 3+ hours ago
                       });
                 })
                 ->orderBy('startTime', 'asc') // Process oldest matches first
@@ -350,6 +356,16 @@ class MatchStatusManager implements ShouldQueue
                     $reasons[] = 'available_but_not_live';
                 }
 
+                // CRITICAL FIX: Matches marked as LIVE that started 3+ hours ago are definitely finished
+                // Soccer matches don't last 3+ hours - mark immediately
+                if ($match->live_status_id == 1 && $hoursPast > 3) {
+                    $shouldMarkFinished = true;
+                    $action = 'finished_live_3h_old';
+                    $confidence = 100; // Maximum confidence
+                    $reasons[] = 'marked_live_but_3h_old';
+                    // Skip to marking logic below
+                }
+
                 // High confidence if marked as live but very old and not updated
                 if ($match->live_status_id == 1 && $hoursPast > 3 && $hoursSinceUpdate > 2) {
                     $confidence += 30;
@@ -364,9 +380,14 @@ class MatchStatusManager implements ShouldQueue
                 }
 
                 // Determine action based on league coverage and confidence
-                $shouldMarkFinished = false;
+                // Note: shouldMarkFinished may already be set above for live matches 3+ hours old
+                if (!isset($shouldMarkFinished)) {
+                    $shouldMarkFinished = false;
+                }
                 $shouldMarkSoftFinished = false;
-                $action = 'none';
+                if (!isset($action)) {
+                    $action = 'none';
+                }
 
                 // GLOBAL FIX: For ALL matches 24+ hours old, ALWAYS mark as finished
                 // NO EXCEPTIONS - NO CONDITIONS - NO STATUS CHECKS

@@ -320,10 +320,14 @@ class PinnacleService
             return [];
         }
 
-        $endpoint = $isLive ? '/markets/live' : '/markets/prematch';
+        // CRITICAL FIX: Use /markets endpoint with event_type parameter instead of /markets/live
+        // The /markets/live endpoint returns empty, but /markets?event_type=live works
+        $endpoint = '/markets';
 
         $params = [
             'sport_id' => $sportId,
+            'event_type' => $isLive ? 'live' : 'prematch',
+            'is_have_odds' => 'true',  // CRITICAL: Only get events that have odds
         ];
 
         if (!empty($leagueIds)) {
@@ -333,12 +337,22 @@ class PinnacleService
         Log::info('Fetching markets from Pinnacle API', [
             'sportId' => $sportId,
             'isLive' => $isLive,
+            'endpoint' => $endpoint,
             'leagueIds' => $leagueIds
         ]);
 
         $data = $this->makeRequest('GET', $endpoint, $params);
 
-        $count = is_array($data) ? count($data) : 0;
+        // Ensure we return the expected structure
+        if (!is_array($data)) {
+            return ['events' => []];
+        }
+
+        if (!isset($data['events']) || !is_array($data['events'])) {
+            $data['events'] = [];
+        }
+
+        $count = count($data['events']);
         Log::info('Markets fetch completed', [
             'sportId' => $sportId,
             'isLive' => $isLive,
@@ -346,7 +360,7 @@ class PinnacleService
             'has_data' => $count > 0
         ]);
 
-        return is_array($data) ? $data : [];
+        return $data;
     }
 
     public function getSports()
@@ -473,5 +487,93 @@ class PinnacleService
         ]);
 
         return is_array($data) ? $data : [];
+    }
+
+    /**
+     * Get markets for a specific event
+     * Tries /markets endpoint first, then falls back to /markets/live or /markets/prematch
+     */
+    public function getMarketsForEvent($eventId, $sportId, $isLive = false)
+    {
+        if (!$this->validateApiKey()) {
+            return ['events' => []];
+        }
+
+        Log::info('Fetching markets for specific event from Pinnacle API', [
+            'eventId' => $eventId,
+            'sportId' => $sportId,
+            'isLive' => $isLive
+        ]);
+
+        // Try /markets endpoint first (API doesn't support event_id filter, so we filter in PHP)
+        // CRITICAL: Add is_have_odds=true to only get events that have odds data
+        $params = [
+            'sport_id' => $sportId,
+            'event_type' => $isLive ? 'live' : 'prematch',
+            'is_have_odds' => 'true',  // CRITICAL: Only get events that have odds
+        ];
+
+        $data = $this->makeRequest('GET', '/markets', $params);
+
+        // Filter to find the specific event (API doesn't support event_id parameter)
+        if (is_array($data) && isset($data['events']) && is_array($data['events'])) {
+            $eventIdStr = (string)$eventId;
+            $eventIdInt = (int)$eventId;
+            
+            foreach ($data['events'] as $event) {
+                $eventIdFromData = $event['event_id'] ?? null;
+                // Handle both string and int comparison
+                if ($eventIdFromData == $eventId || 
+                    (string)$eventIdFromData === $eventIdStr ||
+                    (int)$eventIdFromData === $eventIdInt) {
+                    Log::info('Found event in /markets response', [
+                        'eventId' => $eventId,
+                        'has_periods' => isset($event['periods']),
+                        'periods_count' => isset($event['periods']) ? count($event['periods']) : 0,
+                        'total_events_searched' => count($data['events'])
+                    ]);
+                    return ['events' => [$event]];
+                }
+            }
+            
+            Log::debug('Event not found in /markets response', [
+                'eventId' => $eventId,
+                'event_type' => $isLive ? 'live' : 'prematch',
+                'total_events' => count($data['events']),
+                'sample_event_ids' => array_slice(array_column($data['events'], 'event_id'), 0, 10)
+            ]);
+        }
+
+        // Fallback: Try /markets/live or /markets/prematch
+        Log::debug('Event not found in /markets, trying /markets/live or /markets/prematch', [
+            'eventId' => $eventId
+        ]);
+        
+        $endpoint = $isLive ? '/markets/live' : '/markets/prematch';
+        $fallbackParams = ['sport_id' => $sportId];
+        $fallbackData = $this->makeRequest('GET', $endpoint, $fallbackParams);
+
+        if (is_array($fallbackData) && isset($fallbackData['events']) && is_array($fallbackData['events'])) {
+            foreach ($fallbackData['events'] as $event) {
+                $eventIdFromData = $event['event_id'] ?? null;
+                if ($eventIdFromData == $eventId || 
+                    (string)$eventIdFromData === (string)$eventId ||
+                    (int)$eventIdFromData === (int)$eventId) {
+                    Log::info('Found event in fallback markets response', [
+                        'eventId' => $eventId,
+                        'endpoint' => $endpoint
+                    ]);
+                    return ['events' => [$event]];
+                }
+            }
+        }
+
+        Log::warning('Event not found in any markets response', [
+            'eventId' => $eventId,
+            'sportId' => $sportId,
+            'isLive' => $isLive
+        ]);
+
+        return ['events' => []];
     }
 }
