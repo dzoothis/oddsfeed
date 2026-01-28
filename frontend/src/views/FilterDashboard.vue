@@ -581,6 +581,7 @@ const loadAllMatchesForSport = async () => {
     allMatches.value = response.data.matches || []
 
     // Sort matches: live first, then available for betting, then prematch/soft_finished, by date
+    // CRITICAL: For live matches, sort by startTime DESCENDING (most recently started first)
     allMatches.value.sort((a, b) => {
       const getPriority = (match) => {
         if (match.betting_availability === 'live') return 4
@@ -595,8 +596,18 @@ const loadAllMatchesForSport = async () => {
       if (aPriority !== bPriority) return bPriority - aPriority
 
       // For same priority, sort by time
-      const aTime = new Date(a.scheduled_time || a.last_updated || '2026-01-01')
-      const bTime = new Date(b.scheduled_time || b.last_updated || '2026-01-01')
+      // CRITICAL FIX: For live matches, sort DESCENDING (newest first)
+      // For other types, sort ASCENDING (oldest first for prematch)
+      // Prefer startTime (raw ISO timestamp) over scheduled_time (formatted string) for accurate sorting
+      const aTime = new Date(a.startTime || a.scheduled_time || a.last_updated || '2026-01-01')
+      const bTime = new Date(b.startTime || b.scheduled_time || b.last_updated || '2026-01-01')
+      
+      // If both are live matches, sort DESCENDING (newest first)
+      if (aPriority === 4 && bPriority === 4) {
+        return bTime - aTime // DESCENDING for live matches - most recently started first
+      }
+      
+      // For other priorities, sort ASCENDING (oldest first)
       return aTime - bTime
     })
 

@@ -16,73 +16,26 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // Sync live matches for all sports
-        // CRITICAL FIX: Explicitly set sportId for ALL sports to prevent defaulting to sportId=7 (NFL)
-        // Previously, if sportId was not specified, it would default to NFL, causing Soccer matches to be missed
+        // Sync live matches for ALL sports
+        // OPTIMIZED: ONE job syncs ALL 11 sports every 1 minute
+        // This is more efficient than 11 separate jobs and ensures all live matches update every minute
+        // API-Football is called once (for Soccer) and shared across all sports
         
-        $schedule->job(new LiveMatchSyncJob(1)) // Soccer
+        $schedule->job(new LiveMatchSyncJob(null)) // null = sync ALL sports (1-11)
             ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-soccer');
-        
-        $schedule->job(new LiveMatchSyncJob(2)) // Tennis
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-tennis');
-        
-        $schedule->job(new LiveMatchSyncJob(3)) // Basketball
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-basketball');
+            ->withoutOverlapping(60)
+            ->name('live-match-sync-all-sports');
 
-        $schedule->job(new LiveMatchSyncJob(4)) // Hockey
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-hockey');
-
-        $schedule->job(new LiveMatchSyncJob(5)) // Volleyball
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-volleyball');
-
-        $schedule->job(new LiveMatchSyncJob(6)) // Handball
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-handball');
-
-        $schedule->job(new LiveMatchSyncJob(7)) // American Football
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-american-football');
-
-        $schedule->job(new LiveMatchSyncJob(8)) // Mixed Martial Arts
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-mma');
-
-        $schedule->job(new LiveMatchSyncJob(9)) // Baseball
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-baseball');
-
-        $schedule->job(new LiveMatchSyncJob(10)) // E Sports
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-esports');
-
-        $schedule->job(new LiveMatchSyncJob(11)) // Cricket
-            ->everyMinute()
-            ->withoutOverlapping()
-            ->name('live-match-sync-cricket');
-
+        // OPTIMIZED: OddsSyncJob - every 10 minutes (odds don't change that frequently)
         $schedule->job(new OddsSyncJob())
-            ->everyMinute()
-            ->withoutOverlapping()
+            ->cron('*/10 * * * *')
+            ->withoutOverlapping(600)
             ->name('odds-sync');
 
+        // PrematchSyncJob - already optimized at 5 minutes
         $schedule->job(new PrematchSyncJob())
             ->everyFiveMinutes()
-            ->withoutOverlapping()
+            ->withoutOverlapping(300)
             ->name('prematch-sync');
 
         // Player data management - ensure all teams have fresh lineups
@@ -114,34 +67,40 @@ class Kernel extends ConsoleKernel
         |--------------------------------------------------------------------------
         */
 
+        // OPTIMIZED: MatchStatusManager jobs - reduced frequency and added overlapping protection
         // Layer 1: API-Football Status Detection (Primary - 60-70% Coverage)
-        // Runs every 5 minutes to catch finished matches from major leagues
+        // Runs every 10 minutes (reduced from 5) to catch finished matches from major leagues
         $schedule->job(new MatchStatusManager('api_football_filter'))
-            ->everyFiveMinutes()
+            ->everyTenMinutes()
+            ->withoutOverlapping(600)
             ->name('finished-match-api-football-filter');
 
         // Layer 2: Pinnacle Market Verification (Secondary - 80-90% Coverage)
-        // Runs every 10 minutes to check if Pinnacle still offers betting markets
+        // Runs every 15 minutes (reduced from 10) to check if Pinnacle still offers betting markets
         $schedule->job(new MatchStatusManager('pinnacle_verification'))
-            ->everyTenMinutes()
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(900)
             ->name('finished-match-pinnacle-verification');
 
         // Layer 3: Time-Based Cleanup (Fallback - 95% Coverage)
-        // Runs every 15 minutes to catch finished matches faster
+        // Runs every 20 minutes (reduced from 15) to catch finished matches
         $schedule->job(new MatchStatusManager('time_based_cleanup', null, true)) // Aggressive mode
-            ->everyFifteenMinutes()
+            ->cron('*/20 * * * *')
+            ->withoutOverlapping(1200)
             ->name('finished-match-time-based-cleanup');
 
         // Layer 4: Staleness Detection (Safety Net - 100% Coverage)
         // Runs daily to remove completely stale matches
         $schedule->job(new MatchStatusManager('stale_data_purge'))
             ->daily()
+            ->withoutOverlapping(86400)
             ->name('finished-match-stale-data-purge');
 
         // Comprehensive Check: All Layers Combined
-        // Runs every 15 minutes in aggressive mode for faster cleanup
+        // Runs every 20 minutes (reduced from 15) in aggressive mode
         $schedule->job(new MatchStatusManager('comprehensive_check', null, true)) // Aggressive mode
-            ->everyFifteenMinutes()
+            ->cron('*/20 * * * *')
+            ->withoutOverlapping(1200)
             ->name('finished-match-comprehensive-check');
     }
 

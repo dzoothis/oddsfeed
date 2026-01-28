@@ -277,6 +277,7 @@ class PinnacleService
         $params = [
             'sport_id' => $sportId,
             'event_type' => $eventType,
+            'is_have_odds' => 'true',  // CRITICAL: Only get events that have odds
         ];
 
         // Only add league_id parameter if leagues are specified
@@ -295,6 +296,25 @@ class PinnacleService
         $data = $this->makeRequest('GET', '/markets', $params);
 
         $eventsCount = (is_array($data) && isset($data['events']) && is_array($data['events'])) ? count($data['events']) : 0;
+
+        // Log sample event structure to verify API response format
+        if ($eventsCount > 0 && isset($data['events'][0])) {
+            $sampleEvent = $data['events'][0];
+            Log::info('Pinnacle API response structure verification', [
+                'sportId' => $sportId,
+                'eventType' => $eventType,
+                'events_count' => $eventsCount,
+                'sample_event_keys' => array_keys($sampleEvent),
+                'has_event_type' => isset($sampleEvent['event_type']),
+                'has_eventType' => isset($sampleEvent['eventType']),
+                'has_live_status_id' => isset($sampleEvent['live_status_id']),
+                'event_type_value' => $sampleEvent['event_type'] ?? $sampleEvent['eventType'] ?? 'not_found',
+                'live_status_id_value' => $sampleEvent['live_status_id'] ?? 'not_found',
+                'sample_event_id' => $sampleEvent['event_id'] ?? null,
+                'sample_home' => $sampleEvent['home'] ?? null,
+                'sample_away' => $sampleEvent['away'] ?? null,
+            ]);
+        }
 
         Log::info('Matches fetch completed', [
             'sportId' => $sportId,

@@ -30,19 +30,15 @@ class LiveMatchSyncJob implements ShouldQueue
 
     /**
      * Create a new job instance.
-     *
-     * @return void
+     * 
+     * @param int|null $sportId If null, will sync ALL sports. If provided, syncs only that sport.
+     * @param array $leagueIds Optional league IDs to filter
      */
     public function __construct($sportId = null, $leagueIds = [])
     {
-        // CRITICAL FIX: sportId must be explicitly provided
-        // Previously, if not provided, it would default to sportId=7 (NFL) in some code paths
-        // Now we require it to be explicitly set to prevent accidental NFL sync
-        if (!$sportId) {
-            throw new \InvalidArgumentException('sportId is required for LiveMatchSyncJob. Cannot default to avoid accidental NFL sync.');
-        }
-        
-        $this->sportId = $sportId;
+        // If sportId is null, this job will sync ALL sports (all 11 sports)
+        // This is more efficient than having 11 separate jobs
+        $this->sportId = $sportId; // null = all sports
         $this->leagueIds = $leagueIds;
         $this->onQueue('live-sync');
     }
@@ -56,18 +52,80 @@ class LiveMatchSyncJob implements ShouldQueue
         ApiFootballService $apiFootballService,
         MatchAggregationService $aggregationService
     ): void {
-        Log::info('LiveMatchSyncJob started - Provider-Agnostic Aggregation', [
-            'sportId' => $this->sportId,
+        // If sportId is null, sync ALL sports (1-11)
+        $sportsToSync = $this->sportId ? [$this->sportId] : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        
+        Log::info('LiveMatchSyncJob started - Syncing all sports every minute', [
+            'sports_to_sync' => $sportsToSync,
+            'total_sports' => count($sportsToSync),
             'leagueIds' => $this->leagueIds
         ]);
 
+        // Fetch API-Football data once (only for Soccer, but we fetch it once for all)
+        $apiFootballMatches = [];
         try {
-            // Step 1: Fetch live matches from ALL providers independently
-            // No provider is treated as primary - all are equal (UNION approach)
+            $apiFootballFixtures = $apiFootballService->getFixtures(null, null, true); // live=true
+            $apiFootballMatches = $apiFootballFixtures['response'] ?? [];
+            Log::info('Fetched live matches from API-Football (for all sports)', [
+                'total_match_count' => count($apiFootballMatches)
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Failed to fetch API-Football matches', [
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // Process each sport
+        foreach ($sportsToSync as $sportId) {
+            try {
+                $this->syncSport($sportId, $pinnacleService, $teamResolutionService, $apiFootballService, $aggregationService, $apiFootballMatches);
+            } catch (\Exception $e) {
+                Log::error('Failed to sync sport', [
+                    'sport_id' => $sportId,
+                    'error' => $e->getMessage()
+                ]);
+                // Continue with next sport even if one fails
+                continue;
+            }
+        }
+
+        // Run cleanup operations once after all sports are synced
+        try {
+            $finishedMatchesRemoved = $this->removeFinishedMatches($apiFootballService);
+            $duplicatesCleaned = $this->cleanupDuplicateMatches();
             
-            // 1.1: Fetch from Pinnacle
+            Log::info('Cleanup operations completed', [
+                'finished_matches_removed' => $finishedMatchesRemoved,
+                'duplicates_cleaned' => $duplicatesCleaned
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Cleanup operations failed', [
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        Log::info('LiveMatchSyncJob completed - All sports synced', [
+            'sports_synced' => count($sportsToSync)
+        ]);
+    }
+
+    /**
+     * Sync a single sport
+     */
+    private function syncSport(
+        $sportId,
+        PinnacleService $pinnacleService, 
+        TeamResolutionService $teamResolutionService, 
+        ApiFootballService $apiFootballService,
+        MatchAggregationService $aggregationService,
+        array $apiFootballMatches
+    ): void {
+        Log::info('Syncing sport', ['sport_id' => $sportId]);
+
+        try {
+            // Step 1: Fetch live matches from Pinnacle for this sport
             $pinnacleMatchesData = $pinnacleService->getMatchesByLeagues(
-                $this->sportId ?? 1, // Default to Soccer (fixed from NFL)
+                $sportId,
                 [], // Always fetch ALL leagues (empty array)
                 'live'
             );
@@ -75,40 +133,27 @@ class LiveMatchSyncJob implements ShouldQueue
 
             Log::info('Fetched live matches from Pinnacle', [
                 'total_match_count' => count($pinnacleMatches),
-                'sport_id' => $this->sportId
+                'sport_id' => $sportId
             ]);
-
-            // 1.2: Fetch from API-Football
-            $apiFootballMatches = [];
-            try {
-                $apiFootballFixtures = $apiFootballService->getFixtures(null, null, true); // live=true
-                $apiFootballMatches = $apiFootballFixtures['response'] ?? [];
-                
-                Log::info('Fetched live matches from API-Football', [
-                    'total_match_count' => count($apiFootballMatches)
-                ]);
-            } catch (\Exception $e) {
-                Log::warning('Failed to fetch API-Football matches', [
-                    'error' => $e->getMessage()
-                ]);
-            }
 
             // 1.3: Fetch from Odds-Feed (if available)
             $oddsFeedMatches = [];
             try {
                 $oddsFeedService = app(\App\Services\OddsFeedService::class);
                 if ($oddsFeedService->isEnabled()) {
-                    $oddsFeedMatches = $oddsFeedService->getLiveMatches($this->sportId ?? 1, []);
+                    $oddsFeedMatches = $oddsFeedService->getLiveMatches($sportId, []);
                     
                     Log::info('Fetched live matches from Odds-Feed', [
-                        'total_match_count' => count($oddsFeedMatches)
+                        'total_match_count' => count($oddsFeedMatches),
+                        'sport_id' => $sportId
                     ]);
                 } else {
                     Log::debug('Odds-Feed service is disabled or not configured');
                 }
             } catch (\Exception $e) {
                 Log::warning('Failed to fetch Odds-Feed matches', [
-                    'error' => $e->getMessage()
+                    'error' => $e->getMessage(),
+                    'sport_id' => $sportId
                 ]);
             }
 
@@ -124,12 +169,15 @@ class LiveMatchSyncJob implements ShouldQueue
                 'aggregated_count' => count($aggregatedMatches),
                 'pinnacle_count' => count($pinnacleMatches),
                 'api_football_count' => count($apiFootballMatches),
-                'odds_feed_count' => count($oddsFeedMatches)
+                'odds_feed_count' => count($oddsFeedMatches),
+                'sport_id' => $sportId
             ]);
 
             if (empty($aggregatedMatches)) {
-                Log::info('No aggregated live matches found, skipping processing');
-                return;
+                Log::debug('No aggregated live matches found for sport', [
+                    'sport_id' => $sportId
+                ]);
+                return; // Continue with next sport
             }
 
             // Step 3: Apply league filtering if requested (after aggregation)
@@ -143,61 +191,56 @@ class LiveMatchSyncJob implements ShouldQueue
                 
                 Log::info('After league filtering', [
                     'filtered_match_count' => count($liveMatches),
-                    'requested_leagues' => $this->leagueIds
+                    'requested_leagues' => $this->leagueIds,
+                    'sport_id' => $sportId
                 ]);
             }
 
             // Step 4: Convert aggregated matches to format expected by team resolution
             $matchesForResolution = $this->convertAggregatedToResolutionFormat($liveMatches);
+            
+            Log::info('After convertAggregatedToResolutionFormat', [
+                'sport_id' => $sportId,
+                'matches_count' => count($matchesForResolution),
+                'sample_event_ids' => array_slice(array_column($matchesForResolution, 'event_id'), 0, 10)
+            ]);
 
             // Step 5: Process and resolve teams for all aggregated matches
             $processedMatches = $this->processMatchesWithTeamResolution(
                 $matchesForResolution,
                 $teamResolutionService,
-                $this->sportId ?? 1
+                $sportId
             );
+            
+            Log::info('After processMatchesWithTeamResolution', [
+                'sport_id' => $sportId,
+                'processed_matches_count' => count($processedMatches),
+                'sample_ids' => array_slice(array_column($processedMatches, 'id'), 0, 10)
+            ]);
 
-            // Step 3: Group by league and cache
+            // Step 6: Group by league and cache
             $matchesByLeague = $this->groupMatchesByLeague($processedMatches);
 
             foreach ($matchesByLeague as $leagueId => $leagueMatches) {
-                $this->cacheLiveMatchesForLeague($leagueId, $leagueMatches, $this->sportId ?? 1);
+                $this->cacheLiveMatchesForLeague($leagueId, $leagueMatches, $sportId);
             }
 
-            // Step 4: Update database selectively (only changed matches)
-            $this->updateDatabaseSelectively($processedMatches);
+            // Step 7: Update database selectively (only changed matches)
+            $this->updateDatabaseSelectively($processedMatches, $sportId);
 
-        // REMOVED: available_for_betting update logic
-        // This was causing old matches to be updated every minute, preventing cleanup
-        // Frontend only uses "live" and "prematch" filters, so this is not needed
-        // Old matches will now be properly cleaned up by MatchStatusManager
-
-        // Remove finished matches from database
-        $finishedMatchesRemoved = $this->removeFinishedMatches($apiFootballService);
-
-        // Clean up any remaining duplicate matches
-        $duplicatesCleaned = $this->cleanupDuplicateMatches();
-
-        // Update timestamps for live-visible matches that weren't processed by Pinnacle
-        $timestampsUpdated = $this->updateLiveVisibleMatchTimestamps();
-
-        Log::info('LiveMatchSyncJob completed successfully', [
-            'processed_matches' => count($processedMatches),
-            'leagues_updated' => count($matchesByLeague),
-            'finished_matches_removed' => $finishedMatchesRemoved,
-            'duplicates_cleaned' => $duplicatesCleaned,
-            'live_visible_timestamps_updated' => $timestampsUpdated
-        ]);
-
-        } catch (\Exception $e) {
-            Log::error('LiveMatchSyncJob failed', [
-                'error' => $e->getMessage(),
-                'sportId' => $this->sportId,
-                'leagueIds' => $this->leagueIds,
-                'trace' => $e->getTraceAsString()
+            Log::info('Sport sync completed', [
+                'sport_id' => $sportId,
+                'processed_matches' => count($processedMatches),
+                'leagues_updated' => count($matchesByLeague)
             ]);
 
-            throw $e; // Re-throw to trigger retry
+        } catch (\Exception $e) {
+            Log::error('Failed to sync sport', [
+                'error' => $e->getMessage(),
+                'sportId' => $sportId,
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Don't throw - continue with next sport even if one fails
         }
     }
 
@@ -239,15 +282,20 @@ class LiveMatchSyncJob implements ShouldQueue
                 $matchStartTime = isset($match['starts']) ? strtotime($match['starts']) : null;
                 $hasStarted = $matchStartTime && $matchStartTime <= time();
                 
-                // If Pinnacle says live but match hasn't started, mark as prematch
+                // CRITICAL FIX: Don't downgrade live matches to prematch
+                // If Pinnacle says it's live (status 1), trust Pinnacle and keep it as live
+                // The frontend query will filter by time if needed
+                // This ensures all Pinnacle live matches are saved to database
                 if ($liveStatusId === 1 && !$hasStarted) {
-                    $liveStatusId = 0; // Mark as prematch (not actually live yet)
-                    Log::debug('Match marked as prematch - live betting available but match not started', [
+                    // Keep as live - Pinnacle says it's live, so it's live
+                    // Don't downgrade to prematch - this was causing matches to not be saved
+                    Log::debug('Pinnacle match marked as live (trusting Pinnacle status)', [
                         'event_id' => $match['event_id'] ?? 'unknown',
                         'home_team' => $match['home'] ?? 'Unknown',
                         'away_team' => $match['away'] ?? 'Unknown',
                         'starts' => $match['starts'] ?? 'N/A',
-                        'pinnacle_live_status_id' => $match['live_status_id'] ?? 0
+                        'pinnacle_live_status_id' => $match['live_status_id'] ?? 0,
+                        'note' => 'Keeping as live - Pinnacle is authoritative'
                     ]);
                 }
                 
@@ -419,9 +467,17 @@ class LiveMatchSyncJob implements ShouldQueue
         ]);
     }
 
-    private function updateDatabaseSelectively($matches)
+    private function updateDatabaseSelectively($matches, $sportId = null)
     {
         $updatedCount = 0;
+        $skippedCount = 0;
+        $newMatchesCount = 0;
+        $existingMatchesCount = 0;
+
+        Log::info('updateDatabaseSelectively called', [
+            'total_matches' => count($matches),
+            'sport_id' => $sportId
+        ]);
 
         foreach ($matches as $matchData) {
             try {
@@ -432,17 +488,33 @@ class LiveMatchSyncJob implements ShouldQueue
                     $existingMatch = $this->findDuplicateMatch($matchData);
                 }
 
-                // CRITICAL: Never overwrite matches that are already marked as finished
-                // This prevents LiveMatchSyncJob from resetting finished matches back to live
+                // CRITICAL: Allow restoration of finished matches if aggregation says they're live
+                // This fixes the issue where matches were incorrectly marked as finished
+                // BUT: Only restore if aggregation system (Pinnacle) explicitly says it's live (status = 1)
+                $newLiveStatusId = $matchData['live_status_id'] ?? 0;
                 if ($existingMatch && ($existingMatch->live_status_id == 2 || $existingMatch->live_status_id == -1)) {
-                    Log::debug('Skipping update for finished match - preventing reset to live', [
-                        'match_id' => $matchData['id'],
-                        'existing_live_status_id' => $existingMatch->live_status_id,
-                        'pinnacle_live_status_id' => $matchData['live_status_id'] ?? 0,
-                        'home_team' => $matchData['home_team'],
-                        'away_team' => $matchData['away_team']
-                    ]);
-                    continue; // Skip finished matches - don't reset them to live
+                    if ($newLiveStatusId == 1) {
+                        // Aggregation says it's live - allow restoration (will be handled below)
+                        Log::info('Allowing restoration of finished match - aggregation says it\'s live', [
+                            'match_id' => $matchData['id'],
+                            'existing_live_status_id' => $existingMatch->live_status_id,
+                            'pinnacle_live_status_id' => $newLiveStatusId,
+                            'home_team' => $matchData['home_team'],
+                            'away_team' => $matchData['away_team']
+                        ]);
+                        // Continue to update logic below - don't skip
+                    } else {
+                        // Match is finished and aggregation doesn't say it's live - skip
+                        Log::debug('Skipping update for finished match - aggregation confirms finished', [
+                            'match_id' => $matchData['id'],
+                            'existing_live_status_id' => $existingMatch->live_status_id,
+                            'pinnacle_live_status_id' => $newLiveStatusId,
+                            'home_team' => $matchData['home_team'],
+                            'away_team' => $matchData['away_team']
+                        ]);
+                        $skippedCount++;
+                        continue; // Skip finished matches that are still finished
+                    }
                 }
 
                 // IMPORTANT: Always save new matches (even if they don't exist yet)
@@ -450,6 +522,31 @@ class LiveMatchSyncJob implements ShouldQueue
                 // For live matches, always update lastUpdated even if nothing else changed
                 $isLiveMatch = ($matchData['live_status_id'] ?? 0) == 1;
                 $shouldUpdate = !$existingMatch || $this->hasLiveMatchChanged($existingMatch, $matchData) || $isLiveMatch;
+                
+                // DEBUG: Log matches that are NOT being updated
+                if (!$shouldUpdate) {
+                    Log::debug('Match not being updated - shouldUpdate=false', [
+                        'match_id' => $matchData['id'],
+                        'home_team' => $matchData['home_team'],
+                        'away_team' => $matchData['away_team'],
+                        'live_status_id' => $matchData['live_status_id'],
+                        'is_new' => !$existingMatch,
+                        'is_live' => $isLiveMatch,
+                        'has_changed' => $existingMatch ? $this->hasLiveMatchChanged($existingMatch, $matchData) : false
+                    ]);
+                    $skippedCount++;
+                    continue;
+                }
+                
+                // DEBUG: Log new matches that should be saved
+                if (!$existingMatch && $isLiveMatch) {
+                    Log::info('New live match should be saved', [
+                        'match_id' => $matchData['id'],
+                        'home_team' => $matchData['home_team'],
+                        'away_team' => $matchData['away_team'],
+                        'live_status_id' => $matchData['live_status_id']
+                    ]);
+                }
                 
                 if ($shouldUpdate) {
                     // Validate match type transition (sportsbook safety rules)
@@ -460,6 +557,7 @@ class LiveMatchSyncJob implements ShouldQueue
                             'new_type' => $matchData['match_type'],
                             'live_status_id' => $matchData['live_status_id']
                         ]);
+                        $skippedCount++;
                         continue; // Skip invalid transition
                     }
 
@@ -534,6 +632,12 @@ class LiveMatchSyncJob implements ShouldQueue
                     }
 
                     SportsMatch::updateOrCreate($updateKey, $updateData);
+                    
+                    if (!$existingMatch) {
+                        $newMatchesCount++;
+                    } else {
+                        $existingMatchesCount++;
+                    }
 
                     // Dispatch venue enrichment job if not already enriched
                     $this->dispatchVenueEnrichmentIfNeeded($matchData['id']);
@@ -552,7 +656,10 @@ class LiveMatchSyncJob implements ShouldQueue
 
         Log::info('Database updates completed for live matches', [
             'total_matches' => count($matches),
-            'updated_in_db' => $updatedCount
+            'updated_in_db' => $updatedCount,
+            'new_matches' => $newMatchesCount,
+            'existing_matches_updated' => $existingMatchesCount,
+            'skipped' => $skippedCount
         ]);
     }
 
@@ -742,16 +849,21 @@ class LiveMatchSyncJob implements ShouldQueue
             $matchesAvailableForBetting = 0;
 
             foreach ($filteredPinnacleMatches as $pinnacleMatch) {
-                $originalLiveStatusId = $pinnacleMatch['live_status_id'] ?? 0;
+                // CRITICAL: Convert event_type to live_status_id if not already set
+                // This handles raw Pinnacle API responses that have event_type instead of live_status_id
+                $originalLiveStatusId = $pinnacleMatch['live_status_id'] ?? null;
+                if ($originalLiveStatusId === null) {
+                    $eventType = $pinnacleMatch['event_type'] ?? $pinnacleMatch['eventType'] ?? 'prematch';
+                    $originalLiveStatusId = ($eventType === 'live') ? 1 : 0;
+                }
 
                 // Skip betting markets for better matching
                 $homeTeam = $this->normalizeTeamName($pinnacleMatch['home'] ?? '');
                 $awayTeam = $this->normalizeTeamName($pinnacleMatch['away'] ?? '');
 
-                // Skip if it looks like a betting market
+                // Skip if it looks like a betting market (don't add to mergedMatches)
                 if ($this->isBettingMarket($pinnacleMatch)) {
-                    $mergedMatches[] = $pinnacleMatch;
-                    continue;
+                    continue; // Skip betting markets - don't add to mergedMatches
                 }
 
                 $lookupKey = $homeTeam . '|' . $awayTeam;
@@ -1011,8 +1123,8 @@ class LiveMatchSyncJob implements ShouldQueue
                 $homeTeam = $this->normalizeTeamName($fixture['teams']['home']['name'] ?? '');
                 $awayTeam = $this->normalizeTeamName($fixture['teams']['away']['name'] ?? '');
 
-                // Try to find matching match in database
-                $match = SportsMatch::where('sportId', $this->sportId ?? 1)
+                // Try to find matching match in database (check all sports, not just one)
+                $match = SportsMatch::where('sportId', 1) // API-Football is primarily for soccer
                     ->where(function($query) use ($homeTeam, $awayTeam) {
                         $query->where(function($q) use ($homeTeam, $awayTeam) {
                             $q->where('homeTeam', 'like', '%' . $homeTeam . '%')
@@ -1069,6 +1181,7 @@ class LiveMatchSyncJob implements ShouldQueue
     private function convertAggregatedToResolutionFormat(array $aggregatedMatches): array
     {
         $converted = [];
+        $missingEventIdCount = 0;
         
         foreach ($aggregatedMatches as $match) {
             // Use the primary provider's event_id, or first available
@@ -1079,6 +1192,17 @@ class LiveMatchSyncJob implements ShouldQueue
                 $eventId = $metadata['pinnacle_event_id'] ?? 
                           $metadata['api_football_fixture_id'] ?? 
                           null;
+            }
+            
+            // CRITICAL: Skip matches without event_id - they can't be saved
+            if (!$eventId) {
+                $missingEventIdCount++;
+                Log::warning('Skipping match without event_id', [
+                    'home_team' => $match['home_team'] ?? 'Unknown',
+                    'away_team' => $match['away_team'] ?? 'Unknown',
+                    'providers' => $match['providers'] ?? []
+                ]);
+                continue;
             }
             
             $converted[] = [
@@ -1103,6 +1227,14 @@ class LiveMatchSyncJob implements ShouldQueue
                 'aggregated_providers' => $match['providers'] ?? [],
                 'aggregated_metadata' => $match['metadata'] ?? [],
             ];
+        }
+        
+        if ($missingEventIdCount > 0) {
+            Log::warning('Matches skipped due to missing event_id', [
+                'skipped_count' => $missingEventIdCount,
+                'total_aggregated' => count($aggregatedMatches),
+                'converted_count' => count($converted)
+            ]);
         }
         
         return $converted;
@@ -1259,10 +1391,12 @@ class LiveMatchSyncJob implements ShouldQueue
 
         try {
             // IMPROVED: Find duplicates by team_id first (most reliable)
+            // Check ALL sports for duplicates (not just one sport)
             $potentialDuplicates = DB::select("
                 SELECT
                     home_team_id,
                     away_team_id,
+                    sportId,
                     DATE(startTime) as match_date,
                     COUNT(*) as match_count,
                     GROUP_CONCAT(eventId) as event_ids,
@@ -1272,17 +1406,18 @@ class LiveMatchSyncJob implements ShouldQueue
                 WHERE home_team_id IS NOT NULL
                   AND away_team_id IS NOT NULL
                   AND startTime IS NOT NULL
-                  AND sportId = ?
-                GROUP BY home_team_id, away_team_id, DATE(startTime)
+                GROUP BY home_team_id, away_team_id, sportId, DATE(startTime)
                 HAVING COUNT(*) > 1
                 ORDER BY match_date DESC
-            ", [$this->sportId ?? 1]);
+            ");
 
             // IMPROVED: Also find duplicates by team names (for matches with null team_id)
+            // Check ALL sports for duplicates
             $potentialDuplicatesByName = DB::select("
                 SELECT
                     homeTeam,
                     awayTeam,
+                    sportId,
                     DATE(startTime) as match_date,
                     COUNT(*) as match_count,
                     GROUP_CONCAT(eventId) as event_ids,
@@ -1291,11 +1426,10 @@ class LiveMatchSyncJob implements ShouldQueue
                 FROM matches
                 WHERE (home_team_id IS NULL OR away_team_id IS NULL)
                   AND startTime IS NOT NULL
-                  AND sportId = ?
-                GROUP BY homeTeam, awayTeam, DATE(startTime)
+                GROUP BY homeTeam, awayTeam, sportId, DATE(startTime)
                 HAVING COUNT(*) > 1
                 ORDER BY match_date DESC
-            ", [$this->sportId ?? 1]);
+            ");
 
             // Combine both result sets
             $allDuplicates = array_merge($potentialDuplicates, $potentialDuplicatesByName);
@@ -1385,10 +1519,10 @@ class LiveMatchSyncJob implements ShouldQueue
             // - Either have live_status_id = 1 OR (have open markets AND are available for betting)
             // - Were last updated more than 5 minutes ago
 
-            // Update timestamps for ALL live matches, not just recent ones
+            // Update timestamps for ALL live matches across ALL sports
             // This ensures "Updated Xm ago" is always current for active live matches
             // CRITICAL: Update ALL matches that are currently live, regardless of when they started
-            $liveVisibleMatches = SportsMatch::where('sportId', $this->sportId ?? 1)
+            $liveVisibleMatches = SportsMatch::whereNotNull('sportId') // All sports
                 ->whereNotIn('live_status_id', [-1, 2]) // Not cancelled or finished
                 ->where(function($q) {
                     $q->where('live_status_id', 1) // Actually live

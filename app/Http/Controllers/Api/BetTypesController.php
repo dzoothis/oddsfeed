@@ -175,13 +175,18 @@ class BetTypesController extends Controller
                           $q->where('startTime', '>=', $threeHoursAgo)
                             ->orWhereNull('startTime');
                       });
+                // For live matches: Most recently started first
+                $query->orderBy('startTime', 'desc')
+                      ->orderBy('lastUpdated', 'desc');
             } else {
                 $query->where('eventType', 'prematch')
                       ->where('live_status_id', '!=', -1)  // Exclude cancelled
                       ->where('live_status_id', '!=', 2);   // Exclude finished
+                // For prematch: Earliest matches first
+                $query->orderBy('startTime', 'asc');
             }
 
-            $matches = $query->orderBy('startTime', 'asc')->get();
+            $matches = $query->get();
 
             \Log::info('Database query result', [
                 'matches_found' => $matches->count(),

@@ -325,6 +325,57 @@ class MatchAggregationService
         try {
             $startTime = isset($match['starts']) ? Carbon::parse($match['starts']) : null;
             
+            // CRITICAL FIX: Convert Pinnacle API's event_type to live_status_id
+            // Pinnacle API returns event_type field ('live' or 'prematch'), not live_status_id
+            // If live_status_id is already set, use it; otherwise convert from event_type
+            
+            // Log raw API response structure for verification
+            Log::debug('Normalizing Pinnacle match - Raw API response structure', [
+                'event_id' => $match['event_id'] ?? null,
+                'available_keys' => array_keys($match),
+                'has_live_status_id' => isset($match['live_status_id']),
+                'has_event_type' => isset($match['event_type']),
+                'has_eventType' => isset($match['eventType']),
+                'event_type_value' => $match['event_type'] ?? $match['eventType'] ?? 'not_found',
+                'live_status_id_value' => $match['live_status_id'] ?? 'not_found',
+                'sample_fields' => [
+                    'home' => $match['home'] ?? null,
+                    'away' => $match['away'] ?? null,
+                    'starts' => $match['starts'] ?? null,
+                    'league_id' => $match['league_id'] ?? null,
+                ]
+            ]);
+            
+            $liveStatusId = $match['live_status_id'] ?? null;
+            
+            if ($liveStatusId === null) {
+                // Convert event_type to live_status_id
+                $eventType = $match['event_type'] ?? $match['eventType'] ?? 'prematch';
+                $liveStatusId = ($eventType === 'live') ? 1 : 0;
+                
+                // Log conversion for debugging
+                Log::info('Converted Pinnacle event_type to live_status_id', [
+                    'event_id' => $match['event_id'] ?? null,
+                    'event_type' => $eventType,
+                    'live_status_id' => $liveStatusId,
+                    'home' => $match['home'] ?? 'Unknown',
+                    'away' => $match['away'] ?? 'Unknown'
+                ]);
+            } else {
+                Log::debug('Using existing live_status_id from Pinnacle response', [
+                    'event_id' => $match['event_id'] ?? null,
+                    'live_status_id' => $liveStatusId
+                ]);
+            }
+            
+            // Determine betting_availability based on live_status_id and start time
+            $bettingAvailability = $match['betting_availability'] ?? 'prematch';
+            if ($liveStatusId === 1) {
+                // Check if match has actually started
+                $hasStarted = $startTime && $startTime->lte(Carbon::now());
+                $bettingAvailability = $hasStarted ? 'live' : 'available_for_betting';
+            }
+            
             return [
                 'provider' => 'pinnacle',
                 'providers' => ['pinnacle'],
@@ -335,19 +386,20 @@ class MatchAggregationService
                 'league_id' => $match['league_id'] ?? null,
                 'league_name' => $match['league_name'] ?? 'Unknown',
                 'start_time' => $startTime,
-                'live_status_id' => $match['live_status_id'] ?? 0,
-                'betting_availability' => $match['betting_availability'] ?? 'prematch',
+                'live_status_id' => $liveStatusId,
+                'betting_availability' => $bettingAvailability,
                 'home_score' => $match['home_score'] ?? 0,
                 'away_score' => $match['away_score'] ?? 0,
                 'match_duration' => $match['clock'] ?? $match['period'] ?? null,
                 'period' => $match['period'] ?? null,
                 'has_open_markets' => $match['is_have_open_markets'] ?? false,
-                'is_live' => ($match['live_status_id'] ?? 0) > 0,
+                'is_live' => $liveStatusId > 0,
                 'odds_sources' => ['pinnacle'],
                 'last_updated' => isset($match['last']) ? date('Y-m-d H:i:s', $match['last']) : now()->toDateTimeString(),
                 'metadata' => [
                     'pinnacle_event_id' => $match['event_id'] ?? null,
                     'pinnacle_league_id' => $match['league_id'] ?? null,
+                    'pinnacle_event_type' => $match['event_type'] ?? $match['eventType'] ?? null,
                 ]
             ];
         } catch (\Exception $e) {

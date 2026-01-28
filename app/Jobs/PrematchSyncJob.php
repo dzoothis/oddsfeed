@@ -42,6 +42,7 @@ class PrematchSyncJob implements ShouldQueue
 
     /**
      * Execute the job - Chunked processing to prevent memory exhaustion
+     * If sportId is null, syncs ALL sports (1-11) like LiveMatchSyncJob
      */
     public function handle(PinnacleService $pinnacleService, TeamResolutionService $teamResolutionService): void
     {
@@ -51,8 +52,42 @@ class PrematchSyncJob implements ShouldQueue
         ]);
 
         $startTime = microtime(true);
-        $sportId = $this->sportId ?? 7; // Default to NFL
+        
+        // If sportId is null, sync ALL sports (1-11) like LiveMatchSyncJob
+        $sportsToSync = $this->sportId ? [$this->sportId] : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        
+        Log::info('PrematchSyncJob - Syncing all sports', [
+            'sports_to_sync' => $sportsToSync,
+            'total_sports' => count($sportsToSync),
+            'leagueIds' => $this->leagueIds
+        ]);
 
+        // Process each sport
+        foreach ($sportsToSync as $sportId) {
+            try {
+                $this->syncSport($sportId, $pinnacleService, $teamResolutionService, $startTime);
+            } catch (\Exception $e) {
+                Log::error('Failed to sync prematch for sport', [
+                    'sport_id' => $sportId,
+                    'error' => $e->getMessage()
+                ]);
+                // Continue with next sport even if one fails
+                continue;
+            }
+        }
+
+        $duration = round(microtime(true) - $startTime, 2);
+        Log::info('PrematchSyncJob completed for all sports', [
+            'total_sports' => count($sportsToSync),
+            'duration_seconds' => $duration
+        ]);
+    }
+
+    /**
+     * Sync prematch matches for a single sport
+     */
+    private function syncSport($sportId, PinnacleService $pinnacleService, TeamResolutionService $teamResolutionService, $startTime): void
+    {
         try {
             // Check if we need to refresh (cache-based staleness check)
             if (!$this->shouldRefreshPrematchData($sportId)) {

@@ -45,8 +45,8 @@ class MatchesController extends Controller
                 return response()->json(['error' => 'sport_id is required'], 400);
             }
 
-            if (!in_array($matchType, ['live', 'prematch', 'available_for_betting', 'all'])) {
-                return response()->json(['error' => 'match_type must be one of: live, prematch, available_for_betting, all'], 400);
+            if (!in_array($matchType, ['live', 'prematch', 'all'])) {
+                return response()->json(['error' => 'match_type must be one of: live, prematch, all'], 400);
             }
 
             if (!$sportId) {
@@ -269,7 +269,7 @@ class MatchesController extends Controller
             if ($matchType === 'live') {
                 // CRITICAL FIX: Auto-mark old matches as finished before querying
                 // Matches that started 3+ hours ago with live_status_id = 1 are definitely finished
-                // Soccer matches don't last 3+ hours - mark immediately
+                // Different sports have different durations, but 3+ hours is safe for all
                 $threeHoursAgo = $utcNow->copy()->subHours(3);
                 \App\Models\SportsMatch::where('sportId', $sportId)
                     ->where('live_status_id', 1) // Currently marked as live
@@ -279,55 +279,39 @@ class MatchesController extends Controller
                 
                 // CRITICAL: ABSOLUTE EXCLUSION of finished matches - NO EXCEPTIONS
                 // Finished matches (status 2) should NEVER appear in live feed, regardless of scores, time, or any other condition
+                // CRITICAL FIX: Live matches must have STARTED (startTime <= now)
+                // Pinnacle marks matches as live_status_id=1 even before they start (live betting available)
+                // But for "live" filter, we only want matches that are ACTUALLY playing right now
                 $query->where('live_status_id', '!=', -1)  // Exclude cancelled
                       ->where('live_status_id', '!=', 2)   // Exclude finished - ABSOLUTE, NO EXCEPTIONS
-                      ->where(function($q) use ($threeHoursAgo) {
-                          // Only include matches that are ACTUALLY live:
-                          // 1. Marked as live (status 1) AND started within last 3 hours
-                          $q->where(function($liveQ) use ($threeHoursAgo) {
-                              $liveQ->where('live_status_id', 1) // Must be marked as live
-                                    ->where(function($timeQ) use ($threeHoursAgo) {
-                                        // If marked as live, must have started within last 3 hours
-                                        // Soccer matches don't last 3+ hours
-                                        $timeQ->where(function($t) use ($threeHoursAgo) {
-                                            $t->where('startTime', '>=', $threeHoursAgo)
-                                              ->orWhereNull('startTime'); // Or no start time (can't determine age)
-                                        });
-                                    });
-                          })
-                          ->orWhere(function($scoreQ) use ($threeHoursAgo) {
-                              // Matches with scores but status 0 (might be live but not marked)
-                              // BUT also check they started recently (within 3 hours)
-                              $scoreQ->where('live_status_id', 0) // Not marked as live
-                                    ->where(function($s) {
-                                        $s->where('home_score', '>', 0)
-                                          ->orWhere('away_score', '>', 0);
-                                    })
-                                    ->where(function($t) use ($threeHoursAgo) {
-                                        // Must have started within last 3 hours
-                                        $t->where('startTime', '>=', $threeHoursAgo)
-                                          ->orWhereNull('startTime');
-                                    });
-                          });
+                      ->where(function($q) use ($threeHoursAgo, $utcNow) {
+                          // Include ALL matches that have started (startTime <= now) within last 3 hours
+                          // This catches matches that should be live regardless of live_status_id
+                          $q->where('startTime', '<=', $utcNow) // CRITICAL: Must have started
+                            ->where(function($timeQ) use ($threeHoursAgo) {
+                                // Must have started within last 3 hours
+                                $timeQ->where('startTime', '>=', $threeHoursAgo)
+                                      ->orWhereNull('startTime'); // Or no start time (can't determine age)
+                            })
+                            ->where(function($statusQ) {
+                                // Include matches with live_status_id = 1 (marked as live)
+                                // OR matches with scores (actively playing)
+                                // OR matches with live_status_id = 0 that have started (might be live but not marked)
+                                $statusQ->where('live_status_id', 1)
+                                        ->orWhere(function($scoreQ) {
+                                            $scoreQ->where('home_score', '>', 0)
+                                                  ->orWhere('away_score', '>', 0);
+                                        })
+                                        ->orWhere('live_status_id', 0); // Include unmarked matches that have started
+                            });
                       });
             } elseif ($matchType === 'prematch') {
                 // Prematch: Future matches (startTime > now) within 2 days
-                // Include both eventType='prematch' AND future matches with live_status_id=0
-                $query->where(function($q) use ($utcNow) {
-                    $q->where('eventType', 'prematch')
-                      ->orWhere(function($subQ) use ($utcNow) {
-                          // Future matches that haven't started yet
-                          $subQ->where('startTime', '>', $utcNow)
-                               ->where('live_status_id', '=', 0);
-                      });
-                })
-                ->where('startTime', '>', $utcNow)
-                ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(?, INTERVAL 2 DAY))', [$utcNow]);
-            } elseif ($matchType === 'available_for_betting') {
-                $query->where('betting_availability', 'available_for_betting')
-                      ->where('live_status_id', '!=', -1)
-                      ->where('live_status_id', '=', 0)
-                      ->where('startTime', '>', $utcNow);
+                // Include matches that haven't started yet, regardless of live_status_id
+                // If startTime > now, it's a prematch match (even if live_status_id = 1 for live betting availability)
+                // live_status_id = 1 just means live betting is available, but match hasn't started yet
+                $query->where('startTime', '>', $utcNow)
+                      ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(?, INTERVAL 2 DAY))', [$utcNow]);
             }
 
             // For non-live match types, exclude both cancelled and finished
@@ -343,16 +327,16 @@ class MatchesController extends Controller
                       ->where('live_status_id', '!=', 2);   // Exclude finished - ABSOLUTE
                 
                 $query->where(function($q) use ($utcNow) {
-                    // Include live matches (status 1 only, not finished)
+                    // Include live matches (status 1 only, not finished) - but must have STARTED
+                    // CRITICAL: Live matches must have startTime <= now (actually playing)
                     $q->where(function($liveQ) use ($utcNow) {
                         $liveQ->where('live_status_id', '=', 1) // Only live, not finished
-                              ->where('startTime', '<=', $utcNow); // Live matches should not be in the future (timezone-aware)
+                              ->where('startTime', '<=', $utcNow); // CRITICAL: Must have started
                     })
-                    // OR include prematch matches with open markets within 2 days
+                    // OR include prematch matches within 2 days (regardless of hasOpenMarkets)
                     ->orWhere(function($subQ) use ($utcNow) {
-                        $subQ->where('hasOpenMarkets', true)
-                             ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(NOW(), INTERVAL 2 DAY))')
-                             ->where('startTime', '>', $utcNow); // Future matches only (timezone-aware)
+                        $subQ->where('startTime', '>', $utcNow) // Future matches only
+                             ->whereRaw('DATE(startTime) <= DATE(DATE_ADD(?, INTERVAL 2 DAY))', [$utcNow]);
                     });
                 });
             }
@@ -363,16 +347,17 @@ class MatchesController extends Controller
             }
 
             // Apply sorting based on match type
-            // For live matches: Most recent first (most recently updated, then most recently started)
+            // For live matches: Most recently started first (prioritize startTime), then most recently updated
             // For prematch: Earliest matches first
             if ($matchType === 'live') {
-                $query->orderBy('lastUpdated', 'desc')
-                      ->orderBy('startTime', 'desc');
+                // CRITICAL: Prioritize startTime for live matches - most recently started appear first
+                $query->orderBy('startTime', 'desc') // Most recently started first
+                      ->orderBy('lastUpdated', 'desc'); // Then most recently updated
             } elseif ($matchType === 'all') {
                 // For 'all': Live matches first (most recent), then prematch (earliest)
                 $query->orderByRaw('CASE WHEN live_status_id > 0 THEN 0 ELSE 1 END') // Live matches first
-                      ->orderBy('lastUpdated', 'desc') // Most recently updated first
-                      ->orderBy('startTime', 'desc'); // Most recently started first
+                      ->orderBy('startTime', 'desc') // Most recently started first
+                      ->orderBy('lastUpdated', 'desc'); // Then most recently updated
             } else {
                 // Prematch: Earliest matches first
                 $query->orderBy('startTime', 'asc');
@@ -444,14 +429,21 @@ class MatchesController extends Controller
 
         return $databaseMatches->map(function($match) use ($timezone) {
             $isLiveVisible = $this->isLiveVisible($match);
+            
+            // Use UTC for time comparisons (database stores times in UTC)
+            $utcNow = \Carbon\Carbon::now('UTC');
 
-            // Determine betting_availability correctly
+            // CRITICAL FIX: Live matches must have STARTED (startTime <= now)
+            // Pinnacle marks matches as live_status_id=1 even before they start (live betting available)
+            // But for frontend, "live" means match is ACTUALLY playing right now
             $bettingAvailability = 'prematch';
             if ($isLiveVisible) {
+                // Match is actually live (has started and is playing)
                 $bettingAvailability = 'live';
-            } elseif ($match->live_status_id > 0 && $match->startTime && $match->startTime > now()) {
-                // Future match with live_status_id > 0 (Pinnacle marks as "live for betting")
-                $bettingAvailability = 'available_for_betting';
+            } elseif ($match->startTime && $match->startTime > $utcNow) {
+                // Future match (hasn't started yet) - should show as prematch
+                // This includes matches with live_status_id > 0 (Pinnacle marks as "live for betting" but hasn't started)
+                $bettingAvailability = 'prematch';
             } elseif ($match->betting_availability) {
                 $bettingAvailability = $match->betting_availability;
             }
@@ -466,6 +458,7 @@ class MatchesController extends Controller
                 'league_id' => $match->leagueId,
                 'league_name' => $match->league ? $match->league->name : 'League ' . $match->leagueId,
                 'scheduled_time' => $match->startTime ? $this->formatScheduledTime($match->startTime, $timezone) : 'TBD',
+                'startTime' => $match->startTime ? $match->startTime->toIso8601String() : null, // Raw ISO timestamp for sorting
                 'match_type' => $match->match_type ?? $match->eventType,
                 'betting_availability' => $bettingAvailability,
                 'live_status_id' => $match->live_status_id ?? 0,
@@ -583,13 +576,6 @@ class MatchesController extends Controller
             $matches = array_merge($matches, $prematchMatches);
         }
 
-        if ($matchType === 'available_for_betting') {
-            $matches = array_filter($matches, function ($m) {
-                return (isset($m['betting_availability']) && $m['betting_availability'] === 'available_for_betting');
-            });
-            $matches = array_values($matches);
-        }
-
         return $matches;
     }
 
@@ -612,35 +598,21 @@ class MatchesController extends Controller
 
         if (is_string($startTime)) {
             $startTime = \Carbon\Carbon::parse($startTime);
+        } elseif ($startTime instanceof \Carbon\Carbon) {
+            // Ensure it's in UTC for comparison
+            $startTime = $startTime->utc();
         }
 
-        $now = \Carbon\Carbon::now();
+        // Use UTC for time comparisons (database stores times in UTC)
+        $now = \Carbon\Carbon::now('UTC');
         
-        // CRITICAL: Match must have started to be "live"
+        // CRITICAL: Match must have STARTED to be "live"
         // Future matches are NOT live, even if Pinnacle marks them as "live for betting"
         if ($startTime > $now) {
-            // BUT: If match has live_status_id > 0 or has scores, it might have wrong start time
-            // Check if match is actually playing despite future start time
-            $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
-            $homeScore = isset($match['home_score']) ? $match['home_score'] : (isset($match->home_score) ? $match->home_score : 0);
-            $awayScore = isset($match['away_score']) ? $match['away_score'] : (isset($match->away_score) ? $match->away_score : 0);
-            
-            // If match has live indicators but future start time, start time is likely wrong
-            // But still don't show as live if it's clearly finished (has final scores and no live status)
-            if ($liveStatusId > 0 || ($homeScore > 0 || $awayScore > 0)) {
-                // Start time might be wrong, but check if it's finished
-                if ($liveStatusId == 0 && ($homeScore > 0 || $awayScore > 0)) {
-                    // Has scores but no live status and future start time = likely finished with wrong start time
-                    return false;
-                }
-                // Has live status, might actually be live despite wrong start time
-                // Continue to other checks below
-            } else {
-                return false; // Future matches with no indicators are prematch, not live
-            }
+            return false; // Match hasn't started yet - NOT live
         }
-
-        // PRIMARY: Check live_status_id - trust aggregation system
+        
+        // Match has started - check if it's actually live
         $liveStatusId = isset($match['live_status_id']) ? $match['live_status_id'] : (isset($match->live_status_id) ? $match->live_status_id : 0);
         
         // CRITICAL: ABSOLUTE EXCLUSION - Finished matches should NEVER show as live
@@ -1086,6 +1058,46 @@ class MatchesController extends Controller
 
     private function triggerBackgroundSync($sportId, $leagueIds, $matchType)
     {
+        // CRITICAL: DISABLED automatic background sync from API requests
+        // This was causing excessive API calls and costs
+        // Scheduled jobs in Kernel.php handle all synchronization automatically
+        // Manual refresh endpoint is still available for explicit user requests
+        
+        Log::debug('Background sync disabled - using scheduled jobs only', [
+            'sportId' => $sportId,
+            'matchType' => $matchType,
+            'reason' => 'Automatic sync disabled to reduce API costs - scheduled jobs handle sync'
+        ]);
+        
+        return; // Skip all automatic dispatches - rely on scheduled jobs only
+        
+        // OLD CODE BELOW - KEPT FOR REFERENCE BUT DISABLED
+        /*
+        // RATE LIMITING: Prevent duplicate dispatches within cooldown period
+        // This prevents frontend polling from triggering too many jobs
+        $cooldownKey = "sync_cooldown:{$sportId}:{$matchType}";
+        $cooldownPeriod = 300; // 5 minutes cooldown - INCREASED to reduce costs
+        
+        // GLOBAL cooldown check - prevent ANY sync within 5 minutes
+        $globalCooldownKey = 'sync_cooldown:global';
+        if (Cache::has($globalCooldownKey)) {
+            Log::debug('Background sync skipped - global cooldown active', [
+                'sportId' => $sportId,
+                'matchType' => $matchType,
+                'cooldown_seconds_remaining' => Cache::get($globalCooldownKey)
+            ]);
+            return;
+        }
+        
+        if (Cache::has($cooldownKey)) {
+            Log::debug('Background sync skipped - cooldown active', [
+                'sportId' => $sportId,
+                'matchType' => $matchType,
+                'cooldown_seconds_remaining' => Cache::get($cooldownKey)
+            ]);
+            return;
+        }
+
         if (empty($leagueIds)) {
             $allLeagueIds = DB::table('leagues')
                 ->where('sportId', $sportId)
@@ -1093,12 +1105,11 @@ class MatchesController extends Controller
                 ->toArray();
 
             $leagueIds = $allLeagueIds;
-
-            Log::info('Triggering background sync for all leagues of sport', [
-                'sportId' => $sportId,
-                'leagueIds' => $leagueIds
-            ]);
         }
+
+        // Set GLOBAL cooldown to prevent ANY sync for 5 minutes
+        Cache::put($globalCooldownKey, $cooldownPeriod, $cooldownPeriod);
+        Cache::put($cooldownKey, $cooldownPeriod, $cooldownPeriod);
 
         if ($matchType === 'all' || $matchType === 'live') {
             \App\Jobs\LiveMatchSyncJob::dispatch($sportId, $leagueIds)->onQueue('live-sync');
@@ -1108,7 +1119,12 @@ class MatchesController extends Controller
             \App\Jobs\PrematchSyncJob::dispatch($sportId, $leagueIds)->onQueue('prematch-sync');
         }
 
-        \App\Jobs\OddsSyncJob::dispatch()->onQueue('odds-sync');
+        $oddsCooldownKey = 'sync_cooldown:odds';
+        if (!Cache::has($oddsCooldownKey)) {
+            \App\Jobs\OddsSyncJob::dispatch()->onQueue('odds-sync');
+            Cache::put($oddsCooldownKey, 180, 180); // 3 minutes cooldown
+        }
+        */
     }
 
     /**
@@ -3347,10 +3363,25 @@ class MatchesController extends Controller
     public function manualRefresh(Request $request)
     {
         try {
+            // RATE LIMITING: Prevent excessive manual refreshes
+            $rateLimitKey = 'manual_refresh_rate_limit';
+            $rateLimitWindow = 300; // 5 minutes
+            $maxRefreshesPerWindow = 3; // Max 3 manual refreshes per 5 minutes
+            
+        $currentCount = Cache::get($rateLimitKey, 0);
+        if ($currentCount >= $maxRefreshesPerWindow) {
+            $ttl = Cache::get($rateLimitKey . ':ttl', $rateLimitWindow);
+            return response()->json([
+                'error' => 'Rate limit exceeded',
+                'message' => "Maximum {$maxRefreshesPerWindow} manual refreshes allowed per {$rateLimitWindow} seconds. Please wait.",
+                'retry_after_seconds' => $ttl
+            ], 429);
+        }
+        
             $sportId = $request->input('sport_id');
             $leagueIds = $request->input('league_ids', []);
             $matchType = $request->input('match_type', 'all');
-            $timezone = $request->input('timezone', 'UTC'); // Default to UTC if not provided
+            $timezone = $request->input('timezone', 'UTC');
             $forceRefresh = $request->input('force_refresh', true);
 
             if (!$sportId) {
@@ -3365,8 +3396,13 @@ class MatchesController extends Controller
                 'sportId' => $sportId,
                 'leagueIds' => $leagueIds,
                 'matchType' => $matchType,
-                'forceRefresh' => $forceRefresh
+                'forceRefresh' => $forceRefresh,
+                'rate_limit_count' => $currentCount + 1
             ]);
+
+            // Increment rate limit counter
+            Cache::put($rateLimitKey, $currentCount + 1, $rateLimitWindow);
+            Cache::put($rateLimitKey . ':ttl', $rateLimitWindow, $rateLimitWindow);
 
             $databaseLeagueIds = $this->convertPinnacleIdsToDatabaseIds($leagueIds);
 
@@ -3396,7 +3432,8 @@ class MatchesController extends Controller
                 'league_ids' => $leagueIds,
                 'match_type' => $matchType,
                 'force_refresh' => $forceRefresh,
-                'timestamp' => now()->toISOString()
+                'timestamp' => now()->toISOString(),
+                'rate_limit_remaining' => $maxRefreshesPerWindow - ($currentCount + 1)
             ]);
 
         } catch (\Exception $e) {
