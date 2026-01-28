@@ -60,7 +60,6 @@ export const MARKET_TYPES = {
   MONEY_LINE: 'money_line',
   SPREADS: 'spreads',
   TOTALS: 'totals',
-  PLAYER_PROPS: 'player_props',
   TEAM_TOTALS: 'team_totals',
   TEAM_PROPS: 'team_props',
   CORNERS: 'corners',

@@ -1355,7 +1355,6 @@ class MatchesController extends Controller
 
             // 2. Fetch from API-Football if fixtureId is available
             $apiFootballOdds = [];
-            $apiFootballPlayers = [];
             $fixtureId = null;
             
             if ($match) {
@@ -1412,22 +1411,6 @@ class MatchesController extends Controller
                         ]);
                     }
 
-                    // Fetch player lineups for Player Props
-                    try {
-                        $apiFootballPlayers = $this->apiFootballService->getFixtureLineups($fixtureId, $sportId);
-                        Log::info('Fetched API-Football lineups', [
-                            'matchId' => $matchId,
-                            'fixtureId' => $fixtureId,
-                            'has_lineups' => !empty($apiFootballPlayers),
-                            'lineups_count' => is_array($apiFootballPlayers) ? count($apiFootballPlayers) : 0
-                        ]);
-                    } catch (\Exception $e) {
-                        Log::warning('Failed to fetch API-Football lineups', [
-                            'matchId' => $matchId,
-                            'fixtureId' => $fixtureId,
-                            'error' => $e->getMessage()
-                        ]);
-                    }
                 }
             }
 
@@ -1468,7 +1451,7 @@ class MatchesController extends Controller
                 'odds_feed_count' => count($oddsFeedOdds)
             ]);
 
-            // 5. Process aggregated odds (convert to display format, add player props, etc.)
+            // 5. Process aggregated odds (convert to display format)
             Log::info('DEBUG: Before processAggregatedOdds', [
                 'matchId' => $matchId,
                 'aggregated_count' => count($aggregatedOdds),
@@ -1477,7 +1460,7 @@ class MatchesController extends Controller
                 'aggregated_by_type' => array_count_values(array_column($aggregatedOdds, 'market_type'))
             ]);
             
-            $oddsData = $this->processAggregatedOdds($aggregatedOdds, $matchId, $period, $marketType, $apiFootballPlayers, $sportId);
+            $oddsData = $this->processAggregatedOdds($aggregatedOdds, $matchId, $period, $marketType, [], $sportId);
             
             Log::info('DEBUG: After processAggregatedOdds - FINAL RESULT', [
                 'matchId' => $matchId,
@@ -2554,7 +2537,7 @@ class MatchesController extends Controller
      * @param int $matchId Match ID
      * @param string $period Period (Game, 1st Half, etc.)
      * @param string $marketType Market type filter
-     * @param array $apiFootballPlayers Player lineups from API-Football
+     * @param array $apiFootballPlayers Player lineups from API-Football (deprecated - no longer used)
      * @param int $sportId Sport ID
      * @return array Processed odds data
      */
@@ -2620,11 +2603,6 @@ class MatchesController extends Controller
             ];
         }
 
-        // Add player props if needed (using existing logic)
-        if ($marketType === 'player_props' || $marketType === 'all') {
-            $playerProps = $this->generatePlayerProps($apiFootballPlayers, $sportId, $homeTeamId, $awayTeamId);
-            $allOdds = array_merge($allOdds, $playerProps);
-        }
 
         // Filter by market type and period
         if ($marketType !== 'all') {
@@ -2690,73 +2668,6 @@ class MatchesController extends Controller
         return array_values($filtered);
     }
 
-    /**
-     * Generate player props odds
-     * 
-     * @param array $apiFootballPlayers Player lineups
-     * @param int $sportId Sport ID
-     * @param int|null $homeTeamId Home team ID
-     * @param int|null $awayTeamId Away team ID
-     * @return array Player props odds
-     */
-    private function generatePlayerProps(array $apiFootballPlayers, int $sportId, $homeTeamId, $awayTeamId): array
-    {
-        // Use existing player props generation logic
-        // This is a simplified version - can be enhanced
-        $playerProps = [];
-        
-        // Extract real player names from lineups
-        $realPlayers = [];
-        foreach ($apiFootballPlayers as $lineupData) {
-            if (isset($lineupData['startXI']) && is_array($lineupData['startXI'])) {
-                foreach ($lineupData['startXI'] as $player) {
-                    if (isset($player['player']['name'])) {
-                        $realPlayers[] = $player['player']['name'];
-                    }
-                }
-            }
-        }
-        
-        // Generate props for top 8 players
-        $players = array_slice($realPlayers, 0, 8);
-        if (empty($players)) {
-            $players = ['Player A', 'Player B', 'Player C', 'Player D'];
-        }
-        
-        // Generate props based on sport
-        $propTypes = $sportId == 1 ? ['Goals', 'Assists', 'Shots', 'Cards'] : 
-                    ($sportId == 3 ? ['Points', 'Rebounds', 'Assists', 'Steals'] : 
-                    ['Goals', 'Assists', 'Points', 'Rebounds']);
-        
-        foreach ($players as $player) {
-            foreach ($propTypes as $propType) {
-                $playerProps[] = [
-                    'bet' => "{$player} - {$propType} Over 0.5",
-                    'home_team_id' => $homeTeamId,
-                    'away_team_id' => $awayTeamId,
-                    'line' => '0.5',
-                    'odds' => number_format(rand(150, 250) / 100, 3),
-                    'status' => 'open',
-                    'period' => 'Game',
-                    'source' => 'generated',
-                    'updated_at' => date('Y-m-d H:i:s')
-                ];
-                $playerProps[] = [
-                    'bet' => "{$player} - {$propType} Under 0.5",
-                    'home_team_id' => $homeTeamId,
-                    'away_team_id' => $awayTeamId,
-                    'line' => '0.5',
-                    'odds' => number_format(rand(150, 250) / 100, 3),
-                    'status' => 'open',
-                    'period' => 'Game',
-                    'source' => 'generated',
-                    'updated_at' => date('Y-m-d H:i:s')
-                ];
-            }
-        }
-        
-        return $playerProps;
-    }
 
     /**
      * Legacy method - kept for backward compatibility
@@ -3027,149 +2938,6 @@ class MatchesController extends Controller
                 }
             }
 
-            // Generate Player Props market with REAL player names from API-Football
-            if ($marketType === 'player_props' || $marketType === 'all') {
-                $realPlayers = [];
-                
-                // Extract real player names from API-Football lineups
-                if (!empty($apiFootballPlayers) && is_array($apiFootballPlayers)) {
-                    Log::info('Processing API-Football lineups', [
-                        'matchId' => $matchId,
-                        'lineups_count' => count($apiFootballPlayers),
-                        'first_lineup_keys' => !empty($apiFootballPlayers[0]) ? array_keys($apiFootballPlayers[0]) : []
-                    ]);
-                    
-                    foreach ($apiFootballPlayers as $lineupData) {
-                        // Handle different API-Football response structures
-                        if (isset($lineupData['team']['id']) && isset($lineupData['startXI'])) {
-                            // Determine team type by comparing team names (since IDs might not match)
-                            $teamName = strtolower($lineupData['team']['name'] ?? '');
-                            $homeTeamName = strtolower($homeTeam ?? '');
-                            $awayTeamName = strtolower($awayTeam ?? '');
-                            
-                            // Better team matching using name similarity
-                            $teamType = 'unknown';
-                            if (strpos($homeTeamName, $teamName) !== false || strpos($teamName, $homeTeamName) !== false || 
-                                $this->normalizeTeamName($teamName) === $this->normalizeTeamName($homeTeamName)) {
-                                $teamType = 'home';
-                            } elseif (strpos($awayTeamName, $teamName) !== false || strpos($teamName, $awayTeamName) !== false ||
-                                $this->normalizeTeamName($teamName) === $this->normalizeTeamName($awayTeamName)) {
-                                $teamType = 'away';
-                            }
-                            
-                            foreach ($lineupData['startXI'] as $player) {
-                                $playerName = $player['player']['name'] ?? null;
-                                if ($playerName && strlen($playerName) > 2 && strlen($playerName) < 50) { // Filter out invalid names
-                                    $realPlayers[] = [
-                                        'name' => $playerName,
-                                        'team' => $teamType,
-                                        'team_id' => $lineupData['team']['id']
-                                    ];
-                                }
-                            }
-                        }
-                    }
-                    
-                    Log::info('Extracted players from lineups', [
-                        'matchId' => $matchId,
-                        'players_count' => count($realPlayers),
-                        'sample_players' => array_slice(array_column($realPlayers, 'name'), 0, 3)
-                    ]);
-                }
-                
-                // Extract player names from API-Football odds (if player props are in odds)
-                if (empty($realPlayers) && !empty($apiFootballOdds)) {
-                    foreach ($apiFootballOdds as $oddsData) {
-                        $bookmakers = $oddsData['bookmakers'] ?? [];
-                        if (empty($bookmakers) && isset($oddsData[0]['bookmakers'])) {
-                            $bookmakers = $oddsData[0]['bookmakers'];
-                        }
-                        
-                        foreach ($bookmakers as $bookmaker) {
-                            $bets = $bookmaker['bets'] ?? [];
-                            foreach ($bets as $bet) {
-                                $betName = strtolower($bet['name'] ?? '');
-                                // Check if this is a player prop bet
-                                if (strpos($betName, 'player') !== false || strpos($betName, 'goalscorer') !== false) {
-                                    $values = $bet['values'] ?? [];
-                                    foreach ($values as $value) {
-                                        $valueName = $value['value'] ?? '';
-                                        // Extract player name (usually before dash or colon)
-                                        if (preg_match('/^([^\-:]+)/', $valueName, $matches)) {
-                                            $playerName = trim($matches[1]);
-                                            if ($playerName && !in_array($playerName, array_column($realPlayers, 'name'))) {
-                                                $realPlayers[] = [
-                                                    'name' => $playerName,
-                                                    'team' => 'unknown',
-                                                    'team_id' => null
-                                                ];
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Use real players if available, otherwise use placeholders
-                if (empty($realPlayers)) {
-                    $realPlayers = [
-                        ['name' => 'Player A', 'team' => 'home', 'team_id' => $homeTeamId],
-                        ['name' => 'Player B', 'team' => 'home', 'team_id' => $homeTeamId],
-                        ['name' => 'Player C', 'team' => 'away', 'team_id' => $awayTeamId],
-                        ['name' => 'Player D', 'team' => 'away', 'team_id' => $awayTeamId]
-                    ];
-                } else {
-                    // Limit to top 8 players to avoid too many props
-                    $realPlayers = array_slice($realPlayers, 0, 8);
-                }
-                
-                // Determine prop types based on sport
-                $propTypes = ['Goals', 'Assists', 'Points', 'Rebounds', 'Shots'];
-                if ($sportId == 1) { // Soccer
-                    $propTypes = ['Goals', 'Assists', 'Shots', 'Cards'];
-                } elseif ($sportId == 3) { // Basketball
-                    $propTypes = ['Points', 'Rebounds', 'Assists', 'Steals'];
-                }
-                
-                foreach ($realPlayers as $player) {
-                    $playerName = $player['name'];
-                    $teamLabel = ($player['team'] === 'home') ? '(Home)' : ($player['team'] === 'away' ? '(Away)' : '');
-                    
-                    foreach ($propTypes as $propType) {
-                        $line = rand(5, 25);
-                        if ($propType === 'Goals' || $propType === 'Points') {
-                            $line = rand(0, 5);
-                        } elseif ($propType === 'Assists') {
-                            $line = rand(0, 10);
-                        }
-                        
-                        $allOdds[] = [
-                            'bet' => $playerName . ' - ' . $propType . ' Over ' . $line . ' ' . $teamLabel,
-                            'home_team_id' => ($player['team'] === 'home') ? $homeTeamId : null,
-                            'away_team_id' => ($player['team'] === 'away') ? $awayTeamId : null,
-                            'line' => (string)$line,
-                            'odds' => number_format(rand(180, 220) / 100, 3),
-                            'status' => 'open',
-                            'period' => 'Game',
-                            'source' => !empty($apiFootballPlayers) ? 'api-football' : 'sample',
-                            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                        ];
-                        $allOdds[] = [
-                            'bet' => $playerName . ' - ' . $propType . ' Under ' . $line . ' ' . $teamLabel,
-                            'home_team_id' => ($player['team'] === 'home') ? $homeTeamId : null,
-                            'away_team_id' => ($player['team'] === 'away') ? $awayTeamId : null,
-                            'line' => (string)$line,
-                            'odds' => number_format(rand(180, 220) / 100, 3),
-                            'status' => 'open',
-                            'period' => 'Game',
-                            'source' => !empty($apiFootballPlayers) ? 'api-football' : 'sample',
-                            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(5, 20) . ' minutes'))
-                        ];
-                    }
-                }
-            }
         }
 
         shuffle($allOdds);

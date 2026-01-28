@@ -479,7 +479,6 @@ export default function FilterDashboard() {
       spreads: [],
       totals: [],
       teamTotals: [],
-      playerProps: [],
       teamProps: [],
       gameProps: [],
       futures: []
@@ -546,24 +545,6 @@ export default function FilterDashboard() {
           });
         }
 
-        // Player Props (NBA and other sports)
-        if (marketKey.startsWith('player_')) {
-          const propType = marketKey.replace('player_', '');
-          outcomes.forEach(outcome => {
-            markets.playerProps.push({
-              bet: `${outcome.name} ${propType}`,
-              teamType: outcome.description || outcome.name,
-              price: outcome.price ? parseFloat(outcome.price).toFixed(3) : 'N/A',
-              line: outcome.point ? outcome.point.toString() : null,
-              status: 'Open',
-              period: 'Full Time',
-              source: 'the-odds-api',
-              bookmaker: bookmaker.title,
-              propType: propType,
-              playerName: outcome.description || outcome.name
-            });
-          });
-        }
 
         // Team Props
         if (marketKey === 'btts' || marketKey === 'both_teams_to_score') {
@@ -927,7 +908,6 @@ export default function FilterDashboard() {
           spreads: [],
           totals: [],
           teamTotals: [],
-          playerProps: [],
           futures: [],
           teamProps: [],
           gameProps: []
@@ -1289,14 +1269,6 @@ export default function FilterDashboard() {
 
         const beforeCount = Object.values(match.markets).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
 
-        // Merge Player Props (The-Odds-API has better coverage) - SUPPLEMENTAL ONLY
-        if (oddsApiMarkets.playerProps.length > 0) {
-          match.markets.playerProps = [
-            ...match.markets.playerProps,
-            ...oddsApiMarkets.playerProps
-          ];
-          match.hasTheOddsApiData = true;
-        }
 
         // Merge Team Props (BTTS, Double Chance, Draw No Bet) - SUPPLEMENTAL ONLY
         if (oddsApiMarkets.teamProps.length > 0) {
@@ -2643,10 +2615,7 @@ export default function FilterDashboard() {
                 };
 
                 // Categorize special markets
-                if (special.category === 'Player Props') {
-                  match.markets.playerProps.push(specialMarket);
-                  specialsAdded++;
-                } else if (special.category === 'Team Props') {
+                if (special.category === 'Team Props') {
                   match.markets.teamProps.push(specialMarket);
                   specialsAdded++;
                 } else if (special.category === 'Game Props') {
@@ -2930,10 +2899,7 @@ export default function FilterDashboard() {
                   category: special.category
                 };
 
-                if (special.category === 'Player Props') {
-                  match.markets.playerProps.push(specialMarket);
-                  specialsAdded++;
-                } else if (special.category === 'Team Props') {
+                if (special.category === 'Team Props') {
                   match.markets.teamProps.push(specialMarket);
                   specialsAdded++;
                 } else if (special.category === 'Game Props') {

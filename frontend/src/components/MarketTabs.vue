@@ -118,7 +118,6 @@ const tabs = [
   { id: 'totals', label: 'Totals' },
   { id: 'teamTotals', label: 'Team Totals' },
   { id: 'teamProps', label: 'Team Props' },
-  { id: 'playerProps', label: 'Player Props' },
   { id: 'corners', label: 'Corners' },
   { id: 'yellowCards', label: 'Cards' },
   { id: 'incidents', label: 'Incidents' }
@@ -134,7 +133,6 @@ const getMarketsForTab = (tabId) => {
     case 'totals': return allMarkets.filter(m => m.marketType === 'totals');
     case 'teamTotals': return allMarkets.filter(m => m.marketType === 'teamTotals');
     case 'teamProps': return allMarkets.filter(m => m.marketType === 'teamProps');
-    case 'playerProps': return allMarkets.filter(m => m.marketType === 'playerProps');
     case 'corners': return allMarkets.filter(m => m.marketType === 'corners');
     case 'yellowCards': return allMarkets.filter(m => m.marketType === 'yellowCards');
     case 'incidents': return allMarkets.filter(m => m.marketType === 'incidents');

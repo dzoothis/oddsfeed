@@ -174,8 +174,6 @@
                     </svg>
                   </span>
                   <span v-else class="ml-1">({{ getMarketCount(match, market.key) }})</span>
-                  <span v-if="market.key === 'player_props' && match.markets.player_props.available" class="ml-1"
-                    title="Available">🟢</span>
                 </button>
               </div>
 
@@ -347,8 +345,7 @@ const loadingMarkets = ref({});
 const availableMarkets = [
   { key: 'money_line', name: 'Money Line' },
   { key: 'spreads', name: 'Spreads' },
-  { key: 'totals', name: 'Totals' },
-  { key: 'player_props', name: 'Player Props' }
+  { key: 'totals', name: 'Totals' }
 ];
 
 const periodOptions = ['All', 'Game', '1st Half', '1st Quarter', '2nd Half', '2nd Quarter'];
